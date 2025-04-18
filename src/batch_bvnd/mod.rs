@@ -22,6 +22,24 @@ impl BatchBvnd {
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
         self.inner.bvnd(x, y)
     }
+
+    /// Same as bvnd, but faster if you already know values of phid(-x), phid(-y).
+    /// Note that no checking of the values you provide is performed.
+    ///
+    /// Here phid(z) := 0.5 erfc(z/sqrt(2))
+    ///
+    /// If you know standard normal CDF of z or -z already then you probably have
+    /// a good value for phid.
+    pub fn bvnd_with_precomputed_phid(
+        &self,
+        x: f64,
+        y: f64,
+        phid_minus_x: f64,
+        phid_minus_y: f64,
+    ) -> f64 {
+        self.inner
+            .bvnd_with_precomputed_phid(x, y, phid_minus_x, phid_minus_y)
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -204,26 +222,32 @@ impl BatchBvndInner {
             return phid(dh);
         }
         */
+        self.bvnd_with_precomputed_phid(dh, dk, phid(-dh), phid(-dk))
+    }
 
+    // Comptue bvnd, using precomputed values of phid(-dh), phid(-dk)
+    fn bvnd_with_precomputed_phid(
+        &self,
+        dh: f64,
+        dk: f64,
+        phid_minus_dh: f64,
+        phid_minus_dk: f64,
+    ) -> f64 {
         match self {
             Self::RhoMinus1 => {
-                let h = -dh;
-                let k = -dk;
-                let mut bvn = 0.0;
-                if k > h {
-                    bvn += phid(k) - phid(h)
+                if dk > dh {
+                    phid_minus_dk - phid_minus_dh
+                } else {
+                    0.0
                 } // TODO: looks a bit funky, but matches tvpack... maybe there's a bug
-                bvn
             }
-            Self::Rho0 => {
-                let h = dh;
-                let k = dk;
-                phid(-h) * phid(-k)
-            }
+            Self::Rho0 => phid_minus_dh * phid_minus_dk,
             Self::Rho1 => {
-                let h = dh;
-                let k = dk;
-                phid(-f64::max(h, k))
+                if dh > dk {
+                    phid_minus_dh
+                } else {
+                    phid_minus_dk
+                }
             }
             Self::RhoMiddle { quadrature, n } => {
                 let h = dh;
@@ -239,7 +263,7 @@ impl BatchBvndInner {
                     bvn += (*w * ((*sn * hk - hs) * denom_inv).exp()).reduce_add();
                 }
                 // Note: bvn *= asr * FRAC_1_2_PI was folded into w
-                bvn += phid(-h) * phid(-k);
+                bvn += phid_minus_dh * phid_minus_dk;
                 bvn
             }
             Self::RhoOther {
@@ -306,13 +330,17 @@ impl BatchBvndInner {
                 if *rho > 0.0 {
                     let h = dh;
                     let k = dk;
-                    bvn += phid(-f64::max(h, k));
+                    if h > k {
+                        bvn += phid_minus_dh;
+                    } else {
+                        bvn += phid_minus_dk;
+                    }
                 } else {
                     bvn = -bvn;
                     let h = -dh;
                     let k = -dk;
                     if k > h {
-                        bvn += phid(k) - phid(h)
+                        bvn += phid_minus_dk - phid_minus_dh
                     }
                 }
                 bvn
