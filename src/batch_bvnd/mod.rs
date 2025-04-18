@@ -49,12 +49,12 @@ enum BatchBvndInner {
         // a_inv = 1.0 / a
         a_inv: f64,
         // Precomputed quadrature values, dependent on the value of rho
-        quadrature: Vec<Quad2, 20>,
+        quadrature: [Quad2; 20],
     },
 }
 
 // Values associated to Rho middle quadrature
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 struct Quad1 {
     // sn (sine value) from tvpack algorithm
     sn: f64,
@@ -63,7 +63,7 @@ struct Quad1 {
 }
 
 // Values associated to Rho other quadrature
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 struct Quad2 {
     // x_s (x square) from tvpack algorithm
     // Note: tvpack mutates a before computing x, so we have to divide by two,
@@ -110,8 +110,9 @@ impl BatchBvndInner {
             let a = sqrt(a_s);
             let a_inv = a.recip();
 
-            let mut quadrature = Vec::<Quad2, 20>::new();
+            let mut quadrature = [Quad2::default(); 20];
             let tv_pack_quad = select_quadrature(rho.abs());
+            debug_assert!(tv_pack_quad.len() == 10);
             // Note: We want to generate the x's in monotonically
             // decreasing order because it simplifies loop exit criteria
             // So we don't use the tvpack ordering
@@ -120,10 +121,11 @@ impl BatchBvndInner {
             // The x's are negative and start close to -.99, and a is positive and close to 1.
             // So starting with is = -1.0 and iterating will start with the largest x and go to smallest.
             // When we then do is = 1.0, we go in reverse order.
-            for ((w, x), is) in tv_pack_quad
+            for (idx, ((w, x), is)) in tv_pack_quad
                 .iter()
                 .map(|p| (p, -1.0))
                 .chain(tv_pack_quad.iter().rev().map(|p| (p, 1.0)))
+                .enumerate()
             {
                 let a = a * 0.5; // See tvpack before quadrature starts
                 let x = a * (is * x + 1.0);
@@ -135,15 +137,13 @@ impl BatchBvndInner {
                 let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
                 let r_s_inv = r_s.recip();
 
-                quadrature
-                    .push(Quad2 {
-                        x_s,
-                        x_s_inv,
-                        r_s_inv,
-                        r_s_ratio,
-                        w,
-                    })
-                    .unwrap();
+                quadrature[idx] = Quad2 {
+                    x_s,
+                    x_s_inv,
+                    r_s_inv,
+                    r_s_ratio,
+                    w,
+                };
             }
             quadrature.windows(2).for_each(|w| {
                 debug_assert!(
@@ -229,20 +229,13 @@ impl BatchBvndInner {
                 let d = (12.0 - hk) / 16.0;
                 let asr = -0.5 * (b_s * (a_inv * a_inv) + hk);
 
-                let common = c * (1.0 - d  *b_s/5.0) / 3.0;
+                let common = c * (1.0 - d * b_s / 5.0) / 3.0;
                 if asr > -100.0 {
-                    bvn = a
-                        * exp(asr)
-                        * (1.0 - (b_s - a_s) * common
-                            + c * d * (a_s * a_s) / 5.0);
+                    bvn = a * exp(asr) * (1.0 - (b_s - a_s) * common + c * d * (a_s * a_s) / 5.0);
                 }
                 if -hk < 100.0 {
                     let b = b.abs();
-                    bvn -= exp(-0.5 * hk)
-                        * SQRT_2_PI
-                        * phid(-b * a_inv)
-                        * b
-                        * (1.0 - b_s * common);
+                    bvn -= exp(-0.5 * hk) * SQRT_2_PI * phid(-b * a_inv) * b * (1.0 - b_s * common);
                 }
 
                 for Quad2 {
