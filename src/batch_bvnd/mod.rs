@@ -40,6 +40,59 @@ impl BatchBvnd {
         self.inner
             .bvnd_with_precomputed_phid(x, y, phid_minus_x, phid_minus_y)
     }
+
+    /// Batch evaluate bvnd at all points of a grid.
+    /// This computes and reuses values of phid, which improves performance noticeably for large grids,
+    /// and is relatively easy to use from the caller's perspective.
+    ///
+    /// This routine does not allocate, but uses an output parameter to store results.
+    ///
+    /// Input:
+    ///   `xs`: A slice of f64 values
+    ///   `ys`: A slice of f64 values
+    ///   `out`: A mutable slice of f64 values.
+    ///
+    /// Pre-conditions:
+    ///   `out` has length `(xs.len() + 1) * (ys.len() + 1)`, and will be interpreted as a `(Y+1) * (X+1)` matrix.
+    ///   In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
+    ///
+    ///   None of the values you pass in should be infinity or nan.
+    ///
+    /// Post-conditions:
+    ///   The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
+    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, with those imaginary entries.
+    ///
+    ///   When one of the arguments would be -∞, bivariate normal cdf degenerates to univariate normal cdf,
+    ///   so you will get `phid` of the other argument.
+    ///
+    ///   `out[0][0]` will be `1.0` always.
+    pub fn grid_bvnd(&self, xs: &[f64], ys: &[f64], out: &mut [f64]) {
+        let xn = xs.len();
+        let yn = ys.len();
+
+        debug_assert!(
+            out.len() == (xn + 1) * (yn + 1),
+            "Invalid output buffer length: {} != {} = ({xn} + 1) * ({yn} + 1)",
+            out.len(),
+            (xn + 1) * (yn + 1)
+        );
+
+        let stride = xn + 1;
+
+        out[0] = 1.0;
+        for i in 0..xn {
+            out[1 + i] = phid(-xs[i]);
+        }
+        for j in 0..yn {
+            let phid_y = phid(-ys[j]);
+            out[stride * j] = phid_y;
+
+            for i in 0..xn {
+                out[stride * j + i + 1] =
+                    self.bvnd_with_precomputed_phid(xs[i], ys[j], out[1 + i], phid_y);
+            }
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
