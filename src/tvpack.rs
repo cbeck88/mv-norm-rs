@@ -10,11 +10,13 @@ use libm::{asin, sin};
 // These quadratures from the bvnd fortran sources
 // https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514
 //
+// NOTE: We added the last entry to quad6 as padding to simplify the simd version of this
 //*     Gauss Legendre Points and Weights, N = 6
-const QUAD_6: [(f64, f64); 3] = [
+const QUAD_6: [(f64, f64); 4] = [
     (0.1713244923791705e+00, -0.9324695142031522e+00),
     (0.3607615730481384e+00, -0.6612093864662647e+00),
     (0.4679139345726904e+00, -0.2386191860831970e+00),
+    (0.0, 0.0),
 ];
 
 //*     Gauss Legendre Points and Weights, N = 12
@@ -42,7 +44,18 @@ const QUAD_20: [(f64, f64); 10] = [
 ];
 
 // quadrature selection from tvpack bvnd algorithm
-pub(crate) fn select_quadrature(rho_abs: f64) -> &'static [(f64, f64)] {
+fn select_quadrature(rho_abs: f64) -> &'static [(f64, f64)] {
+    if rho_abs < 0.3 {
+        &QUAD_6[..3]
+    } else if rho_abs < 0.75 {
+        &QUAD_12[..]
+    } else {
+        &QUAD_20[..]
+    }
+}
+
+// quadrature selection, but we pad the result to be a multiple of two, for simd
+pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
     if rho_abs < 0.3 {
         &QUAD_6[..]
     } else if rho_abs < 0.75 {

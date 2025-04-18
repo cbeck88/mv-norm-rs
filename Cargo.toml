@@ -15,7 +15,6 @@ default = ["std"]
 std = []
 
 [dependencies]
-heapless = "0.8"
 libm = "0.2.11"
 wide = "0.7"
 

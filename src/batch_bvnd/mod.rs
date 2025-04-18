@@ -1,6 +1,5 @@
-use crate::tvpack::select_quadrature;
+use crate::tvpack::select_quadrature_padded;
 use crate::util::*;
-use heapless::Vec;
 use libm::{asin, sin};
 use wide::f64x4;
 
@@ -37,8 +36,10 @@ enum BatchBvndInner {
     // Rho in (-0.925, .925), not zero
     RhoMiddle {
         // Precomputed quadrature values, dependent on value of rho
-        // <= 20 points
-        quadrature: Vec<Quad1, 20>,
+        // <= 20 points, in groups of 4
+        quadrature: [Quad1; 5],
+        // Number of chunks from the quadrature that are actually populated
+        n: usize,
     },
     // Rho in (-1, -.925) or (.925, 1)
     RhoOther {
@@ -62,11 +63,11 @@ enum BatchBvndInner {
 #[repr(align(32))]
 struct Quad1 {
     // sn (sine value) from tvpack algorithm
-    sn: f64,
+    sn: f64x4,
     // (1 - sn^2)^{-1}, the reciprocal of denominator from tv_pack algo
-    denom_inv: f64,
+    denom_inv: f64x4,
     // weight from tvpack quadrature, times asr / 2pi
-    w: f64,
+    w: f64x4,
 }
 
 // Values associated to Rho other quadrature
@@ -100,23 +101,35 @@ impl BatchBvndInner {
         } else if rho.abs() <= 0.925 {
             let asr = asin(rho) * 0.5;
 
-            let mut quadrature = Vec::<Quad1, 20>::new();
-            for (w, x) in select_quadrature(rho.abs()) {
-                for is in [-1.0, 1.0] {
-                    let sn = sin(asr * (is * x + 1.0));
-                    let denom_inv = (1.0 - sn * sn).recip();
-                    let w = w * asr * FRAC_1_2_PI;
-                    quadrature.push(Quad1 { sn, denom_inv, w }).unwrap();
+            let tv_pack_quad = select_quadrature_padded(rho.abs());
+            debug_assert!(tv_pack_quad.len() % 2 == 0);
+            let n = tv_pack_quad.len() / 2;
+
+            let mut quadrature = [Quad1::default(); 5];
+            for quad_idx in 0..n {
+                let quad = &mut quadrature[quad_idx];
+                for pair_idx in 0..2 {
+                    let (w, x) = tv_pack_quad[2 * quad_idx + pair_idx];
+                    for (sign_idx, is) in [-1.0, 1.0].iter().enumerate() {
+                        let sn = sin(asr * (is * x + 1.0));
+                        let denom_inv = (1.0 - sn * sn).recip();
+                        let w = w * asr * FRAC_1_2_PI;
+
+                        let idx = 2 * pair_idx + sign_idx;
+                        quad.sn.as_array_mut()[idx] = sn;
+                        quad.denom_inv.as_array_mut()[idx] = denom_inv;
+                        quad.w.as_array_mut()[idx] = w;
+                    }
                 }
             }
 
-            Self::RhoMiddle { quadrature }
+            Self::RhoMiddle { quadrature, n }
         } else {
             let a_s = (1.0 + rho) * (1.0 - rho);
             let a = sqrt(a_s);
             let a_inv = a.recip();
 
-            let tv_pack_quad = select_quadrature(rho.abs());
+            let tv_pack_quad = select_quadrature_padded(rho.abs());
             debug_assert!(tv_pack_quad.len() == 10);
             // Note: We want to generate the x's in monotonically
             // decreasing order because it simplifies loop exit criteria
@@ -128,10 +141,10 @@ impl BatchBvndInner {
             // When we then do is = 1.0, we go in reverse order.
             let temp: [(f64, f64); 20] = core::array::from_fn(|idx| {
                 if idx < 10 {
-                    let (w,x) = tv_pack_quad[idx];
-                    (w,-x)
+                    let (w, x) = tv_pack_quad[idx];
+                    (w, -x)
                 } else {
-                    tv_pack_quad[19-idx]
+                    tv_pack_quad[19 - idx]
                 }
             });
 
@@ -212,15 +225,18 @@ impl BatchBvndInner {
                 let k = dk;
                 phid(-f64::max(h, k))
             }
-            Self::RhoMiddle { quadrature } => {
+            Self::RhoMiddle { quadrature, n } => {
                 let h = dh;
                 let k = dk;
                 let hk = h * k;
                 let hs = ((h * h) + (k * k)) * 0.5;
 
+                let hk = f64x4::splat(hk);
+                let hs = f64x4::splat(hs);
+
                 let mut bvn = 0.0;
-                for Quad1 { sn, denom_inv, w } in quadrature.iter() {
-                    bvn += w * exp((sn * hk - hs) * denom_inv);
+                for Quad1 { sn, denom_inv, w } in quadrature.iter().take(*n) {
+                    bvn += (*w * ((*sn * hk - hs) * denom_inv).exp()).reduce_add();
                 }
                 // Note: bvn *= asr * FRAC_1_2_PI was folded into w
                 bvn += phid(-h) * phid(-k);
@@ -254,29 +270,35 @@ impl BatchBvndInner {
 
                 // This threshold comes from tvpack algorithm
                 // Performance improves if we hoist it out of the loop and precompute the stopping point
-                let limit = quadrature
-                    .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] <= (200.0 - hk));
-                for Quad2 {
-                    x_s,
-                    x_s_inv,
-                    r_s_inv,
-                    r_s_ratio,
-                    w,
-                } in quadrature.iter().take(limit)
                 {
+                    let limit = quadrature
+                        .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] <= (200.0 - hk));
+
+                    // Hoisting these out manually in case the compiler cannot see that limit > 0
                     let minus_hk = f64x4::splat(-hk);
                     let b_s = f64x4::splat(b_s);
                     let c = f64x4::splat(c);
                     let d = f64x4::splat(d);
-                    // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
-                    // so we use one of the simd helper libraries that supports exp.
-                    let asr = f64x4::new([-0.5; 4]) * (b_s * x_s_inv - minus_hk);
                     let one = f64x4::ONE;
-                    bvn += (*w
-                        * asr.exp()
-                        * ((minus_hk * r_s_ratio).exp() * r_s_inv
-                            - (one + c * x_s * (one + d * x_s))))
-                        .reduce_add();
+                    let minus_half = f64x4::new([-0.5; 4]);
+
+                    for Quad2 {
+                        x_s,
+                        x_s_inv,
+                        r_s_inv,
+                        r_s_ratio,
+                        w,
+                    } in quadrature.iter().take(limit)
+                    {
+                        // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
+                        // so we use one of the simd helper libraries that supports exp.
+                        let asr = minus_half * (b_s * x_s_inv - minus_hk);
+                        bvn += (*w
+                            * asr.exp()
+                            * ((minus_hk * r_s_ratio).exp() * r_s_inv
+                                - (one + c * x_s * (one + d * x_s))))
+                            .reduce_add();
+                    }
                 }
                 bvn *= -FRAC_1_2_PI;
                 // These h,k declarations are a bit silly but we're trying to preserve
