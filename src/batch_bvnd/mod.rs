@@ -126,15 +126,18 @@ impl BatchBvndInner {
             // The x's are negative and start close to -.99, and a is positive and close to 1.
             // So starting with is = -1.0 and iterating will start with the largest x and go to smallest.
             // When we then do is = 1.0, we go in reverse order.
-            let temp = tv_pack_quad
-                .iter()
-                .map(|p| (*p, -1.0))
-                .chain(tv_pack_quad.iter().rev().map(|p| (*p, 1.0)))
-                .collect::<Vec<((f64, f64), f64), 20>>();
+            let temp: [(f64, f64); 20] = core::array::from_fn(|idx| {
+                if idx < 10 {
+                    let (w,x) = tv_pack_quad[idx];
+                    (w,-x)
+                } else {
+                    tv_pack_quad[19-idx]
+                }
+            });
 
             temp.windows(2).for_each(|w| {
                 debug_assert!(
-                    w[0].1 * w[0].0.1 >= w[0].1 * w[1].0.1,
+                    w[0].1 >= w[1].1,
                     "should be sorted so that x is decreasing: {w:?}"
                 )
             });
@@ -142,9 +145,9 @@ impl BatchBvndInner {
             let quadrature: [Quad2; 5] = core::array::from_fn(|idx| {
                 let mut quad = Quad2::default();
                 for idx2 in 0..4 {
-                    let ((w, x), is) = temp[idx * 4 + idx2];
+                    let (w, x) = temp[idx * 4 + idx2];
                     let a = a * 0.5; // See tvpack before quadrature starts
-                    let x = a * (is * x + 1.0);
+                    let x = a * (x + 1.0);
                     let x_s = x * x;
                     let r_s = sqrt(1.0 - x_s);
                     let w = w * a;
