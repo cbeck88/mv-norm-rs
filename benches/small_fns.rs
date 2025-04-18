@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use mvnorm::{bvnd, BatchBvnd};
+use mvnorm::{BatchBvnd, bvnd};
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 
@@ -109,7 +109,6 @@ fn bvnd_pos_bench(c: &mut Criterion) {
     });
 }
 
-
 fn bvnd_batch_025(c: &mut Criterion) {
     let mut vp = ValuePool::new(|rng| 2.0 * rng.random::<f64>() - 1.0);
     let ctxt = BatchBvnd::new(0.25);
@@ -162,6 +161,14 @@ criterion_group!(builtins, div_bench, sqrt_bench, exp_bench);
 
 criterion_group!(libm, erfc_bench, sin_bench, asin_bench,);
 
-criterion_group!(ours, bvnd_bench, bvnd_pos_bench, bvnd_batch_025, bvnd_batch_05, bvnd_batch_075, bvnd_batch_099);
+criterion_group!(
+    ours,
+    bvnd_bench,
+    bvnd_pos_bench,
+    bvnd_batch_025,
+    bvnd_batch_05,
+    bvnd_batch_075,
+    bvnd_batch_099
+);
 
 criterion_main!(/*builtins, libm,*/ ours);

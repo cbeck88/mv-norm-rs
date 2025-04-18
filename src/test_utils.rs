@@ -6,7 +6,12 @@ pub struct BvndTestPoint {
 }
 
 pub fn get_burkardt_nbs_test_points() -> impl Iterator<Item = BvndTestPoint> {
-    (0..N_MAX).map(|i| BvndTestPoint { x: X_VEC[i], y: Y_VEC[i], r: R_VEC[i], expected: FXY_VEC[i] })
+    (0..N_MAX).map(|i| BvndTestPoint {
+        x: X_VEC[i],
+        y: Y_VEC[i],
+        r: R_VEC[i],
+        expected: FXY_VEC[i],
+    })
 }
 
 // These values from: https://people.math.sc.edu/Burkardt/cpp_src/test_values/test_values.cpp
@@ -110,9 +115,9 @@ const FXY_VEC: [f64; N_MAX] = [
 ];
 const R_VEC: [f64; N_MAX] = [
     0.500, 0.500, 0.500, 0.500, 0.500, 0.500, -0.900, -0.800, -0.700, -0.600, -0.500, -0.400,
-    -0.300, -0.200, -0.100, 0.000, 0.100, 0.200, 0.300, 0.400, 0.500, 0.600, 0.700, 0.800,
-    0.900, 0.673, 0.500, -1.000, -0.500, 0.000, 0.500, 1.000, 0.500, 0.500, 0.500, 0.500,
-    0.500, 0.500, 0.500, 0.500, 0.500,
+    -0.300, -0.200, -0.100, 0.000, 0.100, 0.200, 0.300, 0.400, 0.500, 0.600, 0.700, 0.800, 0.900,
+    0.673, 0.500, -1.000, -0.500, 0.000, 0.500, 1.000, 0.500, 0.500, 0.500, 0.500, 0.500, 0.500,
+    0.500, 0.500, 0.500,
 ];
 const X_VEC: [f64; N_MAX] = [
     -2.0,
@@ -200,4 +205,3 @@ const Y_VEC: [f64; N_MAX] = [
     -1.0,
     0.7071067811865475,
 ];
-

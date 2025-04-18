@@ -43,10 +43,10 @@ enum BatchBvndInner {
         rho: f64,
         // a_s = (1.0 - rho)*(1.0 + rho)
         a_s: f64,
-        // a_s_inv = 1.0 / a_s
-        a_s_inv: f64,
         // a = sqrt(a_s)
         a: f64,
+        // a_inv = 1.0 / a
+        a_inv: f64,
         // Precomputed quadrature values, dependent on the value of rho
         quadrature: Vec<Quad2, 20>,
     },
@@ -94,10 +94,12 @@ impl BatchBvndInner {
             let mut quadrature = Vec::<Quad1, 20>::new();
             for (w, x) in select_quadrature(rho.abs()) {
                 for is in [-1.0, 1.0] {
-                    quadrature.push(Quad1 {
-                        sn: sin(asr * (is * x + 1.0)),
-                        w: w * asr * FRAC_1_2_PI,
-                    }).unwrap();
+                    quadrature
+                        .push(Quad1 {
+                            sn: sin(asr * (is * x + 1.0)),
+                            w: w * asr * FRAC_1_2_PI,
+                        })
+                        .unwrap();
                 }
             }
 
@@ -105,7 +107,7 @@ impl BatchBvndInner {
         } else {
             let a_s = (1.0 + rho) * (1.0 - rho);
             let a = sqrt(a_s);
-            let a_s_inv = a_s.recip();
+            let a_inv = a.recip();
 
             let mut quadrature = Vec::<Quad2, 20>::new();
             for (w, x) in select_quadrature(rho.abs()) {
@@ -120,21 +122,30 @@ impl BatchBvndInner {
                     let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
                     let r_s_inv = r_s.recip();
 
-                    quadrature.push(Quad2 { x_s, x_s_inv, r_s_inv, r_s_ratio, w }).unwrap();
+                    quadrature
+                        .push(Quad2 {
+                            x_s,
+                            x_s_inv,
+                            r_s_inv,
+                            r_s_ratio,
+                            w,
+                        })
+                        .unwrap();
                 }
             }
 
             Self::RhoOther {
                 rho,
                 a_s,
-                a_s_inv,
                 a,
+                a_inv,
                 quadrature,
             }
         }
     }
 
     fn bvnd(&self, dh: f64, dk: f64) -> f64 {
+        /* Note: I don't think we need to do this, and it won't really be possible in the batched api
         if dh == f64::INFINITY || dk == f64::INFINITY {
             return 0.0;
         }
@@ -147,6 +158,7 @@ impl BatchBvndInner {
         } else if dk == f64::NEG_INFINITY {
             return phid(dh);
         }
+        */
 
         match self {
             Self::RhoMinus1 => {
@@ -185,8 +197,8 @@ impl BatchBvndInner {
             Self::RhoOther {
                 rho,
                 a_s,
-                a_s_inv,
                 a,
+                a_inv,
                 quadrature,
             } => {
                 let hk = dh * dk;
@@ -197,7 +209,7 @@ impl BatchBvndInner {
                 let b_s = b * b;
                 let c = (4.0 - hk) / 8.0;
                 let d = (12.0 - hk) / 16.0;
-                let asr = -0.5 * (b_s * a_s_inv + hk);
+                let asr = -0.5 * (b_s * (a_inv * a_inv) + hk);
                 if asr > -100.0 {
                     bvn = a
                         * exp(asr)
@@ -208,12 +220,19 @@ impl BatchBvndInner {
                     let b = b.abs();
                     bvn -= exp(-0.5 * hk)
                         * SQRT_2_PI
-                        * phid(-b / a)
+                        * phid(-b * a_inv)
                         * b
                         * (1.0 - c * b_s * (1.0 - d * b_s / 5.0) / 3.0);
                 }
 
-                for Quad2 { x_s, x_s_inv, r_s_inv, r_s_ratio, w } in quadrature.iter() {
+                for Quad2 {
+                    x_s,
+                    x_s_inv,
+                    r_s_inv,
+                    r_s_ratio,
+                    w,
+                } in quadrature.iter()
+                {
                     let asr = -0.5 * (b_s * x_s_inv + hk);
                     if asr > -100.0 {
                         bvn += w // note: a* was folded into w
@@ -246,8 +265,8 @@ impl BatchBvndInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{BvndTestPoint, get_burkardt_nbs_test_points};
     use assert_within::assert_within;
-    use crate::test_utils::{get_burkardt_nbs_test_points, BvndTestPoint};
 
     #[test]
     fn spot_check_phi2() {
@@ -256,7 +275,7 @@ mod tests {
         let eps = 1e-6;
         for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
             let ctxt = BatchBvnd::new(r);
-            let val = ctxt.bvnd(x,y);
+            let val = ctxt.bvnd(x, y);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, ctxt.bvnd(y,x), val);
             assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
