@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use mvnorm::{BatchBvnd, bvnd};
+use mv_norm::{BatchBvnd, bvnd};
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 
@@ -91,7 +91,7 @@ fn bvnd_bench(c: &mut Criterion) {
         b.iter(|| {
             let arg1: f64 = black_box(vp.next());
             let arg2: f64 = black_box(vp.next());
-            let arg3: f64 = black_box(vp.next() / 2);
+            let arg3: f64 = black_box(vp.next() / 2.0);
             bvnd(arg1, arg2, arg3)
         })
     });

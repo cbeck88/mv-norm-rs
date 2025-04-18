@@ -1,5 +1,5 @@
 [package]
-name = "mvnorm"
+name = "mv-norm"
 version = "0.1.0"
 edition = "2024"
 authors = ["Chris Beck <beck.ct@gmail.com>"]
