@@ -7,7 +7,7 @@ keywords = ["stats", "math", "numerics", "no_std"]
 categories = ["mathematics"]
 description = "Multivariate Normal Distribution functions"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/cbeck88/mvnorm"
+repository = "https://github.com/cbeck88/mv-norm-rs"
 readme = "README.md"
 
 [features]
