@@ -228,10 +228,12 @@ impl BatchBvndInner {
                 let c = (4.0 - hk) / 8.0;
                 let d = (12.0 - hk) / 16.0;
                 let asr = -0.5 * (b_s * (a_inv * a_inv) + hk);
+
+                let common = c * (1.0 - d  *b_s/5.0) / 3.0;
                 if asr > -100.0 {
                     bvn = a
                         * exp(asr)
-                        * (1.0 - c * (b_s - a_s) * (1.0 - d * b_s / 5.0) / 3.0
+                        * (1.0 - (b_s - a_s) * common
                             + c * d * (a_s * a_s) / 5.0);
                 }
                 if -hk < 100.0 {
@@ -240,7 +242,7 @@ impl BatchBvndInner {
                         * SQRT_2_PI
                         * phid(-b * a_inv)
                         * b
-                        * (1.0 - c * b_s * (1.0 - d * b_s / 5.0) / 3.0);
+                        * (1.0 - b_s * common);
                 }
 
                 for Quad2 {
