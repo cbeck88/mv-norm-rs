@@ -11,14 +11,14 @@ use libm::{asin, sin};
 // https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514
 //
 //*     Gauss Legendre Points and Weights, N = 6
-pub(crate) const QUAD_6: [(f64, f64); 3] = [
+const QUAD_6: [(f64, f64); 3] = [
     (0.1713244923791705e+00, -0.9324695142031522e+00),
     (0.3607615730481384e+00, -0.6612093864662647e+00),
     (0.4679139345726904e+00, -0.2386191860831970e+00),
 ];
 
 //*     Gauss Legendre Points and Weights, N = 12
-pub(crate) const QUAD_12: [(f64, f64); 6] = [
+const QUAD_12: [(f64, f64); 6] = [
     (0.4717533638651177e-01, -0.9815606342467191e+00),
     (0.1069393259953183e+00, -0.9041172563704750e+00),
     (0.1600783285433464e+00, -0.7699026741943050e+00),
@@ -28,7 +28,7 @@ pub(crate) const QUAD_12: [(f64, f64); 6] = [
 ];
 
 //*     Gauss Legendre Points and Weights, N = 20
-pub(crate) const QUAD_20: [(f64, f64); 10] = [
+const QUAD_20: [(f64, f64); 10] = [
     (0.1761400713915212e-01, -0.9931285991850949e+00),
     (0.4060142980038694e-01, -0.9639719272779138e+00),
     (0.6267204833410906e-01, -0.9122344282513259e+00),
@@ -40,6 +40,17 @@ pub(crate) const QUAD_20: [(f64, f64); 10] = [
     (0.1491729864726037e+00, -0.2277858511416451e+00),
     (0.1527533871307259e+00, -0.7652652113349733e-01),
 ];
+
+// quadrature selection from tvpack bvnd algorithm
+pub(crate) fn select_quadrature(rho_abs: f64) -> &'static [(f64, f64)] {
+    if rho_abs < 0.3 {
+        &QUAD_6[..]
+    } else if rho_abs < 0.75 {
+        &QUAD_12[..]
+    } else {
+        &QUAD_20[..]
+    }
+}
 
 /// ```ignore
 ///     A function for computing bivariate normal probabilities.
@@ -67,6 +78,10 @@ pub(crate) const QUAD_20: [(f64, f64); 10] = [
 /// ```
 /// https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514
 pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
+    let mut h = dh;
+    let mut k = dk;
+    let hk = h * k;
+
     if dh == f64::INFINITY || dk == f64::INFINITY {
         return 0.0;
     }
@@ -76,19 +91,12 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
         } else {
             return phid(dk);
         }
+    } else if dk == f64::NEG_INFINITY {
+        return phid(hk);
     }
     // Select quadrature
-    let quad = if r.abs() < 0.3 {
-        &QUAD_6[..]
-    } else if r.abs() < 0.75 {
-        &QUAD_12[..]
-    } else {
-        &QUAD_20[..]
-    };
+    let quad = select_quadrature(r.abs());
 
-    let mut h = dh;
-    let mut k = dk;
-    let hk = h * k;
     let mut bvn = 0.0;
 
     if r.abs() < 0.925 {
@@ -168,213 +176,18 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
 mod tests {
     use super::*;
     use assert_within::assert_within;
-
-    // These values from: https://people.math.sc.edu/Burkardt/cpp_src/test_values/test_values.cpp
-    // who says they come from Mathematica
-    //
-    //void bivariate_normal_cdf_values ( int &n_data, double &x, double &y,
-    //  double &r, double &fxy )
-    //
-    //****************************************************************************80
-    //
-    //  Purpose:
-    //
-    //    BIVARIATE_NORMAL_CDF_VALUES returns some values of the bivariate normal CDF.
-    //
-    //  Discussion:
-    //
-    //    FXY is the probability that two variables A and B, which are
-    //    related by a bivariate normal distribution with correlation R,
-    //    respectively satisfy A <= X and B <= Y.
-    //
-    //    Mathematica can evaluate the bivariate normal CDF via the commands:
-    //
-    //      <<MultivariateStatistics`
-    //      cdf = CDF[MultinormalDistribution[{0,0}{{1,r},{r,1}}],{x,y}]
-    //
-    //  Licensing:
-    //
-    //    This code is distributed under the GNU LGPL license.
-    //
-    //  Modified:
-    //
-    //    23 November 2010
-    //
-    //  Author:
-    //
-    //    John Burkardt
-    //
-    //  Reference:
-    //
-    //    National Bureau of Standards,
-    //    Tables of the Bivariate Normal Distribution and Related Functions,
-    //    NBS, Applied Mathematics Series, Number 50, 1959.
-    //
-    //  Parameters:
-    //
-    //    Input/output, int &N_DATA.  The user sets N_DATA to 0 before the
-    //    first call.  On each call, the routine increments N_DATA by 1, and
-    //    returns the corresponding data; when there is no more data, the
-    //    output value of N_DATA will be 0 again.
-    //
-    //    Output, double &X, &Y, the parameters of the function.
-    //
-    //    Output, double &R, the correlation value.
-    //
-    //    Output, double &FXY, the value of the function.
-    //
-
-    const N_MAX: usize = 41;
-    const FXY_VEC: [f64; N_MAX] = [
-        0.02260327218569867E+00,
-        0.1548729518584100E+00,
-        0.4687428083352184E+00,
-        0.7452035868929476E+00,
-        0.8318608306874188E+00,
-        0.8410314261134202E+00,
-        0.1377019384919464E+00,
-        0.1621749501739030E+00,
-        0.1827411243233119E+00,
-        0.2010067421506235E+00,
-        0.2177751155265290E+00,
-        0.2335088436446962E+00,
-        0.2485057781834286E+00,
-        0.2629747825154868E+00,
-        0.2770729823404738E+00,
-        0.2909261168683812E+00,
-        0.3046406378726738E+00,
-        0.3183113449213638E+00,
-        0.3320262544108028E+00,
-        0.3458686754647614E+00,
-        0.3599150462310668E+00,
-        0.3742210899871168E+00,
-        0.3887706405282320E+00,
-        0.4032765198361344E+00,
-        0.4162100291953678E+00,
-        0.6508271498838664E+00,
-        0.8318608306874188E+00,
-        0.0000000000000000,
-        0.1666666666539970,
-        0.2500000000000000,
-        0.3333333333328906,
-        0.5000000000000000,
-        0.7452035868929476,
-        0.1548729518584100,
-        0.1548729518584100,
-        0.06251409470431653,
-        0.7452035868929476,
-        0.1548729518584100,
-        0.1548729518584100,
-        0.06251409470431653,
-        0.6337020457912916,
-    ];
-    const R_VEC: [f64; N_MAX] = [
-        0.500, 0.500, 0.500, 0.500, 0.500, 0.500, -0.900, -0.800, -0.700, -0.600, -0.500, -0.400,
-        -0.300, -0.200, -0.100, 0.000, 0.100, 0.200, 0.300, 0.400, 0.500, 0.600, 0.700, 0.800,
-        0.900, 0.673, 0.500, -1.000, -0.500, 0.000, 0.500, 1.000, 0.500, 0.500, 0.500, 0.500,
-        0.500, 0.500, 0.500, 0.500, 0.500,
-    ];
-    const X_VEC: [f64; N_MAX] = [
-        -2.0,
-        -1.0,
-        0.0,
-        1.0,
-        2.0,
-        3.0,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        -0.2,
-        1.0,
-        2.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-        -1.0,
-        -1.0,
-        1.0,
-        1.0,
-        -1.0,
-        -1.0,
-        0.7071067811865475,
-    ];
-    const Y_VEC: [f64; N_MAX] = [
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        1.0,
-        -1.0,
-        0.7071067811865475,
-    ];
+    use crate::test_utils::{get_burkardt_nbs_test_points, BvndTestPoint};
 
     #[test]
     fn spot_check_phi2() {
         // FIXME: Double check these test vectors, because we had similar precision
         // limits with the owens-t crate which makes me suspicious of them.
         let eps = 1e-6;
-        for n in 0..N_MAX {
-            let x = X_VEC[n];
-            let y = Y_VEC[n];
-            let r = R_VEC[n];
-            let fxy = FXY_VEC[n];
-            let val = bvnd(x, y, r);
+        for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
+            let val = bvnd(x,y,r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, bvnd(y,x,r), val);
-            assert_within!(+eps, val, fxy, "n = {n}, x = {x}, y = {y}, rho = {r}")
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
         }
     }
 }
