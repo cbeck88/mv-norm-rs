@@ -36,6 +36,7 @@ enum BatchBvndInner {
     // Rho in (-0.925, .925), not zero
     RhoMiddle {
         // Precomputed quadrature values, dependent on value of rho
+        // <= 20 points
         quadrature: Vec<Quad1, 20>,
     },
     // Rho in (-1, -.925) or (.925, 1)
@@ -49,34 +50,40 @@ enum BatchBvndInner {
         // a_inv = 1.0 / a
         a_inv: f64,
         // Precomputed quadrature values, dependent on the value of rho
-        quadrature: [Quad2; 20],
+        // =20 points, in chunks of 4
+        quadrature: [Quad2; 5],
     },
 }
 
 // Values associated to Rho middle quadrature
+// Over-aligned to encourage vectorization
 #[derive(Copy, Clone, Debug, Default)]
+#[repr(align(32))]
 struct Quad1 {
     // sn (sine value) from tvpack algorithm
     sn: f64,
+    // (1 - sn^2)^{-1}, the reciprocal of denominator from tv_pack algo
+    denom_inv: f64,
     // weight from tvpack quadrature, times asr / 2pi
     w: f64,
 }
 
 // Values associated to Rho other quadrature
 #[derive(Copy, Clone, Debug, Default)]
+#[repr(align(32))]
 struct Quad2 {
     // x_s (x square) from tvpack algorithm
     // Note: tvpack mutates a before computing x, so we have to divide by two,
     // relative to the a that we record.
-    x_s: f64,
+    x_s: [f64; 4],
     // x_s inverse
-    x_s_inv: f64,
+    x_s_inv: [f64; 4],
     // 1.0/r_s from tvpack algorithm
-    r_s_inv: f64,
+    r_s_inv: [f64; 4],
     // rational expression of r_s used in tvpack: (1.0 - r_s) / (2.0 * (1.0 + r_s))
-    r_s_ratio: f64,
+    r_s_ratio: [f64; 4],
     // w * a/2 from tvpack algorithm
-    w: f64,
+    w: [f64; 4],
 }
 
 impl BatchBvndInner {
@@ -95,12 +102,10 @@ impl BatchBvndInner {
             let mut quadrature = Vec::<Quad1, 20>::new();
             for (w, x) in select_quadrature(rho.abs()) {
                 for is in [-1.0, 1.0] {
-                    quadrature
-                        .push(Quad1 {
-                            sn: sin(asr * (is * x + 1.0)),
-                            w: w * asr * FRAC_1_2_PI,
-                        })
-                        .unwrap();
+                    let sn = sin(asr * (is * x + 1.0));
+                    let denom_inv = (1.0 - sn * sn).recip();
+                    let w = w * asr * FRAC_1_2_PI;
+                    quadrature.push(Quad1 { sn, denom_inv, w }).unwrap();
                 }
             }
 
@@ -110,7 +115,6 @@ impl BatchBvndInner {
             let a = sqrt(a_s);
             let a_inv = a.recip();
 
-            let mut quadrature = [Quad2::default(); 20];
             let tv_pack_quad = select_quadrature(rho.abs());
             debug_assert!(tv_pack_quad.len() == 10);
             // Note: We want to generate the x's in monotonically
@@ -121,35 +125,41 @@ impl BatchBvndInner {
             // The x's are negative and start close to -.99, and a is positive and close to 1.
             // So starting with is = -1.0 and iterating will start with the largest x and go to smallest.
             // When we then do is = 1.0, we go in reverse order.
-            for (idx, ((w, x), is)) in tv_pack_quad
+            let temp = tv_pack_quad
                 .iter()
-                .map(|p| (p, -1.0))
-                .chain(tv_pack_quad.iter().rev().map(|p| (p, 1.0)))
-                .enumerate()
-            {
-                let a = a * 0.5; // See tvpack before quadrature starts
-                let x = a * (is * x + 1.0);
-                let x_s = x * x;
-                let r_s = sqrt(1.0 - x_s);
-                let w = w * a;
+                .map(|p| (*p, -1.0))
+                .chain(tv_pack_quad.iter().rev().map(|p| (*p, 1.0)))
+                .collect::<Vec<((f64, f64), f64), 20>>();
 
-                let x_s_inv = x_s.recip();
-                let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
-                let r_s_inv = r_s.recip();
-
-                quadrature[idx] = Quad2 {
-                    x_s,
-                    x_s_inv,
-                    r_s_inv,
-                    r_s_ratio,
-                    w,
-                };
-            }
-            quadrature.windows(2).for_each(|w| {
+            temp.windows(2).for_each(|w| {
                 debug_assert!(
-                    w[0].x_s_inv <= w[1].x_s_inv,
-                    "should be sorted so that x_s_inv is increasing: {w:?}"
+                    w[0].0.1 >= w[1].0.1,
+                    "should be sorted so that x is decreasing: {w:?}"
                 )
+            });
+
+            let quadrature: [Quad2; 5] = core::array::from_fn(|idx| {
+                let mut quad = Quad2::default();
+                for idx2 in 0..4 {
+                    let ((w, x), is) = temp[idx * 4 + idx2];
+                    let a = a * 0.5; // See tvpack before quadrature starts
+                    let x = a * (is * x + 1.0);
+                    let x_s = x * x;
+                    let r_s = sqrt(1.0 - x_s);
+                    let w = w * a;
+
+                    let x_s_inv = x_s.recip();
+                    let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
+                    let r_s_inv = r_s.recip();
+
+                    quad.x_s[idx2] = x_s;
+                    quad.x_s_inv[idx2] = x_s_inv;
+                    quad.r_s_inv[idx2] = r_s_inv;
+                    quad.r_s_ratio[idx2] = r_s_ratio;
+                    quad.w[idx2] = w;
+                }
+
+                quad
             });
 
             Self::RhoOther {
@@ -205,8 +215,8 @@ impl BatchBvndInner {
                 let hs = ((h * h) + (k * k)) * 0.5;
 
                 let mut bvn = 0.0;
-                for Quad1 { sn, w } in quadrature.iter() {
-                    bvn += w * exp((sn * hk - hs) / (1.0 - sn * sn));
+                for Quad1 { sn, denom_inv, w } in quadrature.iter() {
+                    bvn += w * exp((sn * hk - hs) * denom_inv);
                 }
                 // Note: bvn *= asr * FRAC_1_2_PI was folded into w
                 bvn += phid(-h) * phid(-k);
@@ -246,17 +256,21 @@ impl BatchBvndInner {
                     w,
                 } in quadrature.iter()
                 {
-                    let asr = -0.5 * (b_s * x_s_inv + hk);
-                    if asr > -100.0 {
-                        // note: Reducing this to -25 speeds things up, but gives up on 10^{-11}
-                        bvn += w // note: a* was folded into w
-                            * exp(asr)
-                            * (exp(-hk * r_s_ratio) * r_s_inv
-                                - (1.0 + c * x_s * (1.0 + d * x_s)));
-                    } else {
-                        // We have ensured that x_s is decreasing and so x_s_inv is increasing
-                        // So if asr > -100.0 now, it will be so in the remaining rounds.
+                    // This all ideally gets vectorized, but most likely the "exp" function scares the compiler away
+                    let asr: [f64; 4] =
+                        core::array::from_fn(|idx| -0.5 * (b_s * x_s_inv[idx] + hk));
+                    if asr[0] <= -100.0 {
+                        // This threshold -100.0 comes from tvpack algorithm.
+                        // We have ensured that x_s is decreasing and so x_s_inv is increasing.
+                        // And b_s is positive.
+                        // So if asr <= -100.0 now, it will be so in the remaining rounds.
                         break;
+                    }
+                    for idx in 0..4 {
+                        bvn += w[idx] // note: a* was folded into w
+                            * exp(asr[idx])
+                            * (exp(-hk * r_s_ratio[idx]) * r_s_inv[idx]
+                                - (1.0 + c * x_s[idx] * (1.0 + d * x_s[idx])));
                     }
                 }
                 bvn *= -FRAC_1_2_PI;
