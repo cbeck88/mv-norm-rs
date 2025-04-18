@@ -175,7 +175,9 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{BvndTestPoint, get_burkardt_nbs_test_points};
+    use crate::test_utils::{
+        BvndTestPoint, get_additional_test_points, get_burkardt_nbs_test_points,
+    };
     use assert_within::assert_within;
 
     #[test]
@@ -187,6 +189,17 @@ mod tests {
             let val = bvnd(x, y, r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, bvnd(y,x,r), val);
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    #[test]
+    fn spot_check_phi2_additional() {
+        let eps = 1e-6;
+        for (n, BvndTestPoint { x, y, r, expected }) in get_additional_test_points().enumerate() {
+            let val = bvnd(x, y, r);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, bvnd(y,x, r), val);
             assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
         }
     }

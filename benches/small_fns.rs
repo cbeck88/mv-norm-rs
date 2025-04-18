@@ -157,6 +157,18 @@ fn bvnd_batch_099(c: &mut Criterion) {
     });
 }
 
+fn bvnd_batch_099_2(c: &mut Criterion) {
+    let mut vp = ValuePool::new(|rng| 8.0 * rng.random::<f64>() - 4.0);
+    let ctxt = BatchBvnd::new(0.99);
+    c.bench_function("BatchBvnd::new(0.99).eval(...)", |b| {
+        b.iter(|| {
+            let arg1: f64 = black_box(vp.next());
+            let arg2: f64 = black_box(vp.next());
+            ctxt.bvnd(arg1, arg2)
+        })
+    });
+}
+
 criterion_group!(builtins, div_bench, sqrt_bench, exp_bench);
 
 criterion_group!(libm, erfc_bench, sin_bench, asin_bench,);
@@ -168,7 +180,8 @@ criterion_group!(
     bvnd_batch_025,
     bvnd_batch_05,
     bvnd_batch_075,
-    bvnd_batch_099
+    bvnd_batch_099,
+    bvnd_batch_099_2
 );
 
 criterion_main!(/*builtins, libm,*/ ours);

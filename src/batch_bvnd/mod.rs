@@ -24,6 +24,7 @@ impl BatchBvnd {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum BatchBvndInner {
     // Rho = -1
@@ -110,29 +111,46 @@ impl BatchBvndInner {
             let a_inv = a.recip();
 
             let mut quadrature = Vec::<Quad2, 20>::new();
-            for (w, x) in select_quadrature(rho.abs()) {
-                for is in [-1.0, 1.0] {
-                    let a = a * 0.5; // See tvpack before quadrature starts
-                    let x = a * (is * x + 1.0);
-                    let x_s = x * x;
-                    let r_s = sqrt(1.0 - x_s);
-                    let w = w * a;
+            let tv_pack_quad = select_quadrature(rho.abs());
+            // Note: We want to generate the x's in monotonically
+            // decreasing order because it simplifies loop exit criteria
+            // So we don't use the tvpack ordering
+            // for (w, x) in select_quadrature(rho.abs()) {
+            //    for is in [-1.0, 1.0] {
+            // The x's are negative and start close to -.99, and a is positive and close to 1.
+            // So starting with is = -1.0 and iterating will start with the largest x and go to smallest.
+            // When we then do is = 1.0, we go in reverse order.
+            for ((w, x), is) in tv_pack_quad
+                .iter()
+                .map(|p| (p, -1.0))
+                .chain(tv_pack_quad.iter().rev().map(|p| (p, 1.0)))
+            {
+                let a = a * 0.5; // See tvpack before quadrature starts
+                let x = a * (is * x + 1.0);
+                let x_s = x * x;
+                let r_s = sqrt(1.0 - x_s);
+                let w = w * a;
 
-                    let x_s_inv = x_s.recip();
-                    let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
-                    let r_s_inv = r_s.recip();
+                let x_s_inv = x_s.recip();
+                let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
+                let r_s_inv = r_s.recip();
 
-                    quadrature
-                        .push(Quad2 {
-                            x_s,
-                            x_s_inv,
-                            r_s_inv,
-                            r_s_ratio,
-                            w,
-                        })
-                        .unwrap();
-                }
+                quadrature
+                    .push(Quad2 {
+                        x_s,
+                        x_s_inv,
+                        r_s_inv,
+                        r_s_ratio,
+                        w,
+                    })
+                    .unwrap();
             }
+            quadrature.windows(2).for_each(|w| {
+                debug_assert!(
+                    w[0].x_s_inv <= w[1].x_s_inv,
+                    "should be sorted so that x_s_inv is increasing: {w:?}"
+                )
+            });
 
             Self::RhoOther {
                 rho,
@@ -235,10 +253,15 @@ impl BatchBvndInner {
                 {
                     let asr = -0.5 * (b_s * x_s_inv + hk);
                     if asr > -100.0 {
+                        // note: Reducing this to -25 speeds things up, but gives up on 10^{-11}
                         bvn += w // note: a* was folded into w
                             * exp(asr)
                             * (exp(-hk * r_s_ratio) * r_s_inv
                                 - (1.0 + c * x_s * (1.0 + d * x_s)));
+                    } else {
+                        // We have ensured that x_s is decreasing and so x_s_inv is increasing
+                        // So if asr > -100.0 now, it will be so in the remaining rounds.
+                        break;
                     }
                 }
                 bvn *= -FRAC_1_2_PI;
@@ -265,7 +288,9 @@ impl BatchBvndInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{BvndTestPoint, get_burkardt_nbs_test_points};
+    use crate::test_utils::{
+        BvndTestPoint, get_additional_test_points, get_burkardt_nbs_test_points,
+    };
     use assert_within::assert_within;
 
     #[test]
@@ -274,6 +299,18 @@ mod tests {
         // limits with the owens-t crate which makes me suspicious of them.
         let eps = 1e-6;
         for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, ctxt.bvnd(y,x), val);
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    #[test]
+    fn spot_check_phi2_additional() {
+        let eps = 1e-6;
+        for (n, BvndTestPoint { x, y, r, expected }) in get_additional_test_points().enumerate() {
             let ctxt = BatchBvnd::new(r);
             let val = ctxt.bvnd(x, y);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");

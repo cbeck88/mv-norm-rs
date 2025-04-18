@@ -5,6 +5,22 @@ pub struct BvndTestPoint {
     pub expected: f64,
 }
 
+impl From<&(f64, f64, f64, f64)> for BvndTestPoint {
+    fn from(src: &(f64, f64, f64, f64)) -> Self {
+        let (x, y, r, expected) = *src;
+        Self { x, y, r, expected }
+    }
+}
+
+// Ensure test coverage on the part of the algorithm where rho > 0.925
+pub fn get_additional_test_points() -> impl Iterator<Item = BvndTestPoint> {
+    const POINTS: [(f64, f64, f64, f64); 1] = [
+        (1.0, 1.0, 0.99, 0.8276930269850803),
+        //(-1.0, 1.0, 0.99, 0.8276930269850803),
+    ];
+    (&POINTS[..]).iter().map(Into::into)
+}
+
 pub fn get_burkardt_nbs_test_points() -> impl Iterator<Item = BvndTestPoint> {
     (0..N_MAX).map(|i| BvndTestPoint {
         x: X_VEC[i],
