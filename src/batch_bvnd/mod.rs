@@ -2,6 +2,7 @@ use crate::tvpack::select_quadrature;
 use crate::util::*;
 use heapless::Vec;
 use libm::{asin, sin};
+use wide::f64x4;
 
 /// Context for quickly evaluating bvnd at many points with a single value of rho
 #[derive(Clone, Debug)]
@@ -75,15 +76,15 @@ struct Quad2 {
     // x_s (x square) from tvpack algorithm
     // Note: tvpack mutates a before computing x, so we have to divide by two,
     // relative to the a that we record.
-    x_s: [f64; 4],
+    x_s: f64x4,
     // x_s inverse
-    x_s_inv: [f64; 4],
+    x_s_inv: f64x4,
     // 1.0/r_s from tvpack algorithm
-    r_s_inv: [f64; 4],
+    r_s_inv: f64x4,
     // rational expression of r_s used in tvpack: (1.0 - r_s) / (2.0 * (1.0 + r_s))
-    r_s_ratio: [f64; 4],
+    r_s_ratio: f64x4,
     // w * a/2 from tvpack algorithm
-    w: [f64; 4],
+    w: f64x4,
 }
 
 impl BatchBvndInner {
@@ -133,7 +134,7 @@ impl BatchBvndInner {
 
             temp.windows(2).for_each(|w| {
                 debug_assert!(
-                    w[0].0.1 >= w[1].0.1,
+                    w[0].1 * w[0].0.1 >= w[0].1 * w[1].0.1,
                     "should be sorted so that x is decreasing: {w:?}"
                 )
             });
@@ -152,11 +153,11 @@ impl BatchBvndInner {
                     let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
                     let r_s_inv = r_s.recip();
 
-                    quad.x_s[idx2] = x_s;
-                    quad.x_s_inv[idx2] = x_s_inv;
-                    quad.r_s_inv[idx2] = r_s_inv;
-                    quad.r_s_ratio[idx2] = r_s_ratio;
-                    quad.w[idx2] = w;
+                    quad.x_s.as_array_mut()[idx2] = x_s;
+                    quad.x_s_inv.as_array_mut()[idx2] = x_s_inv;
+                    quad.r_s_inv.as_array_mut()[idx2] = r_s_inv;
+                    quad.r_s_ratio.as_array_mut()[idx2] = r_s_ratio;
+                    quad.w.as_array_mut()[idx2] = w;
                 }
 
                 quad
@@ -248,30 +249,31 @@ impl BatchBvndInner {
                     bvn -= exp(-0.5 * hk) * SQRT_2_PI * phid(-b * a_inv) * b * (1.0 - b_s * common);
                 }
 
+                // This threshold comes from tvpack algorithm
+                // Performance improves if we hoist it out of the loop and precompute the stopping point
+                let limit = quadrature
+                    .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] <= (200.0 - hk));
                 for Quad2 {
                     x_s,
                     x_s_inv,
                     r_s_inv,
                     r_s_ratio,
                     w,
-                } in quadrature.iter()
+                } in quadrature.iter().take(limit)
                 {
-                    // This all ideally gets vectorized, but most likely the "exp" function scares the compiler away
-                    let asr: [f64; 4] =
-                        core::array::from_fn(|idx| -0.5 * (b_s * x_s_inv[idx] + hk));
-                    if asr[0] <= -100.0 {
-                        // This threshold -100.0 comes from tvpack algorithm.
-                        // We have ensured that x_s is decreasing and so x_s_inv is increasing.
-                        // And b_s is positive.
-                        // So if asr <= -100.0 now, it will be so in the remaining rounds.
-                        break;
-                    }
-                    for idx in 0..4 {
-                        bvn += w[idx] // note: a* was folded into w
-                            * exp(asr[idx])
-                            * (exp(-hk * r_s_ratio[idx]) * r_s_inv[idx]
-                                - (1.0 + c * x_s[idx] * (1.0 + d * x_s[idx])));
-                    }
+                    let minus_hk = f64x4::splat(-hk);
+                    let b_s = f64x4::splat(b_s);
+                    let c = f64x4::splat(c);
+                    let d = f64x4::splat(d);
+                    // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
+                    // so we use one of the simd helper libraries that supports exp.
+                    let asr = f64x4::new([-0.5; 4]) * (b_s * x_s_inv - minus_hk);
+                    let one = f64x4::ONE;
+                    bvn += (*w
+                        * asr.exp()
+                        * ((minus_hk * r_s_ratio).exp() * r_s_inv
+                            - (one + c * x_s * (one + d * x_s))))
+                        .reduce_add();
                 }
                 bvn *= -FRAC_1_2_PI;
                 // These h,k declarations are a bit silly but we're trying to preserve
