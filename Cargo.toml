@@ -23,6 +23,6 @@ criterion = { version = "0.4", features = ["html_reports"] }
 rand_pcg = "0.9"
 rand = "0.9"
 
-#[[bench]]
-#name = "small_fns"
-#harness = false
+[[bench]]
+name = "small_fns"
+harness = false
