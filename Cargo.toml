@@ -3,7 +3,7 @@ name = "mv-norm"
 version = "0.1.0"
 edition = "2024"
 authors = ["Chris Beck <beck.ct@gmail.com>"]
-keywords = ["stats", "math", "numerics", "no_std"]
+keywords = ["stats", "math", "simd", "libm", "no_std"]
 categories = ["mathematics"]
 description = "Multivariate Normal Distribution functions"
 license = "MIT OR Apache-2.0"
@@ -12,11 +12,14 @@ readme = "README.md"
 
 [features]
 default = ["std"]
-std = []
+
+# Activate `std` within the crate. This may enable some faster compiler-generated
+# implementations of `f64::exp`, `f64::sqrt`, etc.
+std = ["wide/std"]
 
 [dependencies]
 libm = "0.2.11"
-wide = "0.7"
+wide = { version = "0.7", default-features = false }
 
 [dev-dependencies]
 assert-within = "0.1.3"

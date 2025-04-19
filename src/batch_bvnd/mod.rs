@@ -3,10 +3,21 @@ use crate::util::*;
 use libm::{asin, sin};
 use wide::f64x4;
 
-/// Simple helper for one-off bvnd evaluation.
+
+/// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance `rho`.
 ///
-/// This uses BatchBvnd anyways, in order to get the SIMD optimizations.
-/// But, might not actually be that much faster than `tvpack::bvnd`.
+/// `rho` must be in the range [-1.0, 1.0].
+///
+/// If `x` or `y` equals +∞, the result will be `0.0`.
+/// If `x` or `y` equals -∞, the result is unspecified.
+///
+/// *Note*: This function uses just under 1kb of stack memory.
+/// Typical programs have 4-8kb of stack, so this should usually be fine.
+///
+/// If that's too much for your application, you can alternatively:
+///
+/// * allocate a `BatchBvnd` object somewhere else and call `bvnd` on it
+/// * use `tvpack::bvnd` instead, but it won't have SIMD optimizations then.
 #[inline]
 pub fn bvnd(x: f64, y: f64, rho: f64) -> f64 {
     BatchBvnd::new(rho).bvnd(x, y)
@@ -29,6 +40,9 @@ impl BatchBvnd {
     }
 
     /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance rho
+    ///
+    /// If x or y = +∞, the result will be 0.0.
+    /// If x or y = -∞, the result is unspecified.
     #[inline]
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
         self.inner.bvnd(x, y)
@@ -182,6 +196,11 @@ struct Quad2 {
 }
 
 impl BatchBvndInner {
+    // Note: for actual batch evaluation, this doesn't really need to be fast.
+    // For the bvnd helper function, you would want this to be fast since it won't
+    // really be amortized, but for now I'm not bothering.
+    // Benchmarks show that BvndBatch::new(rho).bvnd(x,y) is still faster than
+    // tvpack::bvnd(x,y,rho) anyways.
     fn new(rho: f64) -> Self {
         assert!(rho.abs() <= 1.0, "rho must be between -1.0 and 1.0: {rho}");
 
