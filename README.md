@@ -12,7 +12,7 @@ Additionally, this crate provides "batch evaluation" APIs which may be much fast
 A common practice for statistics, numerical integration, modeling, etc. is:
 
 * Use R, or Python with Numpy, which has many high-level functions you need and a nice repl with plotting.
-* Low-level statistical primitives are obtained by binding to existing C or Fortran code. These are fast, accurate, and widely used.
+* Low-level statistical primitives, which are perf critical, are obtained by binding to existing C or Fortran code. These are fast, accurate, and [widely](https://cran.r-project.org/web/packages/mvtnorm/index.html) [used](https://github.com/SebastienMarmin/torch-mvnorm).
 
 Numpy itself can often vectorize things just fine.
 
@@ -20,28 +20,28 @@ In this crate, we've taken such C or Fortran code and ported it to pure rust. Th
 
 * It is easier to write safe, portable, and fast SIMD code using existing rust abstractions (e.g. [`wide`](https://crates.io/crates/wide) and the unstable `core::simd`), with significant performance gains. In the harder cases where the C or Fortran code doesn't automatically vectorize, rust gets the job done.
 * It is easier to modify these algorithms to precompute or cache data across calls, in a thread-safe way, without making unnecessary allocations, in rust, than it is to do so in C or Fortran.
-* Using rust also allows you to use [`rayon`](https://docs.rs/rayon/latest/rayon/). Rayon is excellent, and far superior to alternatives like python multiprocessing.
+* Using rust also allows you to use [`rayon`](https://docs.rs/rayon/latest/rayon/). Rayon is excellent, and far superior to alternatives like python multiprocessing or threading.
 * Existing crates like [`gauss_quad`](https://crates.io/crates/gauss-quad) or [`integrate`](https://crates.io/crates/integrate) make it easy to get started, try several integration strategies, and evaluate the best one, and often themselves have an API that uses `rayon`.
 * You can still easily expose bindings to python using [`pyo3`](https://docs.rs/pyo3/latest/pyo3/), and you can directly return `numpy` arrays for further processing using the rust [`numpy` crate](https://docs.rs/numpy/latest/numpy/).
 
-I have been experimenting with workflows where, a large chunk of my model (e.g. a part large enough that it takes > 0.01s to compute) is actually written in rust. Then python code calls out to this, evaluates it with several parameters, plots results, and also manages fetching any data needed to drive it and storing the results. And I don't use python-multiprocessing anywhere. You can also easily play with the model and visualize results in a high-level repl after that point. The main drawback is, at the beginning you do end up going back and forth between rust and python often, but once it's stable I'm happier with the performance and the results. (Then, if you want to evaluate your model on a cluster of machines in the cloud, it's easy to write a pure-rust backend that does that, which IMO is more attractive than a python backend for many reasons.)
+I have been experimenting with workflows where, a large chunk of my model (e.g. a part large enough that it takes > 0.01s to compute) is actually written in rust. Then python code calls out to this, evaluates it with several parameters, plots results, and also manages fetching any data needed to drive it and storing the results. You can also easily play with the model and visualize results in a high-level repl after that point. The main drawback is, at the beginning you do end up going back and forth between rust and python often, but once it's stable I'm happier with the performance and the results. (Then, if you want to evaluate your model on a cluster of machines in the cloud, it's easy to write a pure-rust backend that does that, which IMO is more attractive than a python backend for many reasons.)
 
 Even if you don't go as far as that, and continue to do your gaussian quadrature and integration in python instead, you can make use of lower-level bindings to crates like this one. Especially if you make use of the batch APIs, it may significantly improve the performance of your model compared to what you were doing before.
 
 ### Case study: Bivariate normal cdf
 
-The `mv_norm::BatchBvnd` context object enables evaluating the bivariate normal CDF with as much as ten times higher
+The `mv_norm::BatchBvnd` object enables evaluating the bivariate normal CDF with as much as ten times higher
 throughput, through the use of precomputation and SIMD optimizations. This implementation was derived
 from the `bvnd` function in [Alan Genz' `tvpack` fortran algorithm](https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514), and is tested against it for fidelity.
 
-### Comparisons
+#### Comparisons
 
 At time of writing, I do not believe that [`statsrs`](https://crates.io/crates/statrs) or [`nalgebra-mvn`](https://crates.io/crates/nalgebra-mvn) contain implementations of the bivariate normal CDF,
 and I could not find any other open source crates that do this.
 
-I was not interested in monte-carlo approaches to computing the CDF, or naive approaches based on computing the PDF.
+I was not interested in [monte-carlo approaches](https://github.com/scipy/scipy/blob/6dbfa8c1463e33129cff2dabb01b67174a9bdf32/scipy/stats/_qmvnt.py#L146) to computing the CDF, or naive approaches based on computing the PDF.
 In my motivating use-case, I wanted to use `bvnd` or similar in the integrand of an already complicated numerical integral,
-and I wanted it to be fast and accurate, so that the larger integral does not become prohibitive.
+and I wanted it to be very fast and accurate, so that the larger integral does not become prohibitive.
 
 In my first attempt, I decided to use the [Owen's T function](https://en.wikipedia.org/wiki/Owen%27s_T_function) approach to computing the bivariate normal distribution.
 This is the [`owens-t` crate](https://crates.io/crates/owens-t) published on crates.io -- in that case, we ported
@@ -62,7 +62,7 @@ With these optimizations, throughput increases significantly, and 100 x 100 grid
 
 (Try running the benchmarks on your hardware to see if you observe a similar speed up.)
 
-TODO: Post comparisons with R and numpy timings.
+TODO: Post comparisons with R and [scipy](https://github.com/scipy/scipy/blob/0f1fd4a7268b813fa2b844ca6038e4dfdf90084a/scipy/stats/_multivariate.py#L597) timings.
 
 Compared to the `mvtnorm` R package and the existing `numpy` translations of the original fortran code, I believe that this implementation has some key advantages.
 
