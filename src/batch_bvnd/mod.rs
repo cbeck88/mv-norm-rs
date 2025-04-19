@@ -3,6 +3,15 @@ use crate::util::*;
 use libm::{asin, sin};
 use wide::f64x4;
 
+/// Simple helper for one-off bvnd evaluation.
+///
+/// This uses BatchBvnd anyways, in order to get the SIMD optimizations.
+/// But, might not actually be that much faster than `tvpack::bvnd`.
+#[inline]
+pub fn bvnd(x: f64, y: f64, rho: f64) -> f64 {
+    BatchBvnd::new(rho).bvnd(x, y)
+}
+
 /// Context for quickly evaluating bvnd at many points with a single value of rho
 #[derive(Clone, Debug)]
 pub struct BatchBvnd {

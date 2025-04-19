@@ -54,7 +54,8 @@ fn select_quadrature(rho_abs: f64) -> &'static [(f64, f64)] {
     }
 }
 
-// quadrature selection, but we pad the result to be a multiple of two, for simd
+// quadrature selection, but we padded the result to be a multiple of two
+// which simplified the SIMD version of things.
 pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
     if rho_abs < 0.3 {
         &QUAD_6[..]
@@ -65,6 +66,12 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
     }
 }
 
+/// Rust port of tvpack fortran function bvnd.
+/// Note that this is basically a transliteration, and doesn't use SIMD or make
+/// major changes to the original.
+///
+/// Orignal documentation:
+///
 /// ```ignore
 ///     A function for computing bivariate normal probabilities.
 ///
@@ -95,6 +102,8 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
     let mut k = dk;
     let hk = h * k;
 
+    /* These infinity checks seem okay, but were not actually in the original.
+
     if dh == f64::INFINITY || dk == f64::INFINITY {
         return 0.0;
     }
@@ -106,7 +115,8 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
         }
     } else if dk == f64::NEG_INFINITY {
         return phid(hk);
-    }
+    }*/
+
     // Select quadrature
     let quad = select_quadrature(r.abs());
 
