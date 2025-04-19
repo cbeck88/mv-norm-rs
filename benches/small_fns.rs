@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use mv_norm::{BatchBvnd, bvnd};
+use mv_norm::{BatchBvnd, bvnd, tvpack};
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 
@@ -121,6 +121,42 @@ fn bvnd_pos_bench(c: &mut Criterion) {
     });
 }
 
+fn tvpack_bvnd_bench(c: &mut Criterion) {
+    let mut vp = ValuePool::new(|rng| 4.0 * rng.random::<f64>() - 2.0);
+    c.bench_function("tvpack::bvnd ([-2,2])", |b| {
+        b.iter(|| {
+            let arg1: f64 = black_box(vp.next());
+            let arg2: f64 = black_box(vp.next());
+            let arg3: f64 = black_box(vp.next() / 2.0);
+            tvpack::bvnd(arg1, arg2, arg3)
+        })
+    });
+}
+
+fn tvpack_bvnd_bench_narrow(c: &mut Criterion) {
+    let mut vp = ValuePool::new(|rng| 2.0 * rng.random::<f64>() - 1.0);
+    c.bench_function("tvpack::bvnd ([-1,1])", |b| {
+        b.iter(|| {
+            let arg1: f64 = black_box(vp.next());
+            let arg2: f64 = black_box(vp.next());
+            let arg3: f64 = black_box(vp.next());
+            tvpack::bvnd(arg1, arg2, arg3)
+        })
+    });
+}
+
+fn tvpack_bvnd_pos_bench(c: &mut Criterion) {
+    let mut vp = ValuePool::new(|rng| rng.random::<f64>());
+    c.bench_function("tvpack::bvnd ([0,1]) (rho > 0)", |b| {
+        b.iter(|| {
+            let arg1: f64 = black_box(vp.next());
+            let arg2: f64 = black_box(vp.next());
+            let arg3: f64 = black_box(vp.next());
+            tvpack::bvnd(arg1, arg2, arg3)
+        })
+    });
+}
+
 fn bvnd_batch(c: &mut Criterion) {
     let mut vp = ValuePool::new(|rng| 2.0 * rng.random::<f64>() - 1.0);
 
@@ -193,15 +229,19 @@ criterion_group!(builtins, div_bench, sqrt_bench, exp_bench);
 criterion_group!(libm, erfc_bench, sin_bench, asin_bench,);
 
 criterion_group!(
-    ours,
+    bvnd_single,
     bvnd_bench,
     bvnd_bench_narrow,
     bvnd_pos_bench,
-    bvnd_batch,
-    bvnd_batch_wider,
-    bvnd_batch_099_2
+    tvpack_bvnd_bench,
+    tvpack_bvnd_bench_narrow,
+    tvpack_bvnd_pos_bench,
 );
+
+criterion_group!(our_batch, bvnd_batch, bvnd_batch_wider, bvnd_batch_099_2);
 
 criterion_group!(our_grid_eval, bvnd_grid<50>, bvnd_grid<100>,);
 
-criterion_main!(/*builtins, libm,*/ ours, our_grid_eval);
+criterion_main!(
+    /*builtins, libm,*/ bvnd_single /*, our_batch, our_grid_eval*/
+);
