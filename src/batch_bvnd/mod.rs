@@ -12,6 +12,7 @@ pub struct BatchBvnd {
 impl BatchBvnd {
     /// Precompute for the evaluation of bivariate normal CDF at several points
     /// with this value of rho (correlation coefficient)
+    #[inline]
     pub fn new(rho: f64) -> Self {
         Self {
             inner: BatchBvndInner::new(rho),
@@ -19,6 +20,7 @@ impl BatchBvnd {
     }
 
     /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance rho
+    #[inline]
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
         self.inner.bvnd(x, y)
     }
@@ -30,6 +32,7 @@ impl BatchBvnd {
     ///
     /// If you know standard normal CDF of z or -z already then you probably have
     /// a good value for phid.
+    #[inline]
     pub fn bvnd_with_precomputed_phid(
         &self,
         x: f64,
@@ -56,14 +59,19 @@ impl BatchBvnd {
     ///   `out` has length `(xs.len() + 1) * (ys.len() + 1)`, and will be interpreted as a `(Y+1) * (X+1)` matrix.
     ///   In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
     ///
-    ///   None of the values you pass in should be infinity or nan.
+    ///   If you pass +∞ as an element of `xs` or `ys`, that row or column will be entirely 0.0.
+    ///   If you pass -∞, the behavior in that row or column is unspecified.
     ///
     /// Post-conditions:
     ///   The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
-    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, with those imaginary entries.
+    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thoguht of with those imaginary entries.
     ///
-    ///   When one of the arguments would be -∞, bivariate normal cdf degenerates to univariate normal cdf,
+    ///   Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for bivariate normal of correlation coefficient `rho`.
+    ///
+    ///   When `x` or `y` is -∞, the bivariate normal cdf degenerates to univariate normal cdf,
     ///   so you will get `phid` of the other argument.
+    ///
+    ///   When `x` or `y` is ∞, the result will be `0.0`.
     ///
     ///   `out[0][0]` will be `1.0` always.
     pub fn grid_bvnd(&self, xs: &[f64], ys: &[f64], out: &mut [f64]) {
@@ -79,17 +87,22 @@ impl BatchBvnd {
 
         let stride = xn + 1;
 
+        fn checked_phid(x: f64) -> f64 {
+            if x == f64::NEG_INFINITY { 0.0 } else { phid(x) }
+        }
+
         out[0] = 1.0;
         for i in 0..xn {
-            out[1 + i] = phid(-xs[i]);
+            out[1 + i] = checked_phid(-xs[i]);
         }
         for j in 0..yn {
-            let phid_y = phid(-ys[j]);
+            let phid_y = checked_phid(-ys[j]);
             out[stride * j] = phid_y;
 
             for i in 0..xn {
+                let phid_x = out[1 + i];
                 out[stride * j + i + 1] =
-                    self.bvnd_with_precomputed_phid(xs[i], ys[j], out[1 + i], phid_y);
+                    self.bvnd_with_precomputed_phid(xs[i], ys[j], phid_x, phid_y);
             }
         }
     }
@@ -176,6 +189,27 @@ impl BatchBvndInner {
             debug_assert!(tv_pack_quad.len() % 2 == 0);
             let n = tv_pack_quad.len() / 2;
 
+            // This is a bit messy -- what's happening here is, we went from
+            // a list of static (x, w) points for a quadrature, to a collection of
+            // precomputed "data" depending on rho, needed to evaluate one point
+            // of the quadrature. At that point, it's still an array of structs,
+            // containing named f64 elements.
+            //
+            // When we incorporated simd, we now evaluate multiple quadrature points
+            // simultaneously, so the Quad1 structure now contains f64x4 simd vectors.
+            // So now it's more like an array of structs of arrays.
+            //
+            // Additionally, in `tvpack` algorithm every entry x in the quadrature array
+            // is actually evaluated at 1-x and 1+x, with the same weight. So the `tvpack`
+            // array is length 10, but implies 20 quadrature points.
+            //
+            // Depeding on the value of rho, we get at most a 20 point quadrature,
+            // and tv_pack_quad has length 4, or 6, or 10.
+            //
+            // We iterate over tv_pack_quad in pairs, and then for each of those entries,
+            // there is the 1-x and the 1+x version. That makes four quadrature points,
+            // which are processed and stored in simd vectors for a single Quad1 object.
+            // There are either 2, 3, or 5 Quad1 objects produced, depending on the value of n.
             let mut quadrature = [Quad1::default(); 5];
             for quad_idx in 0..n {
                 let quad = &mut quadrature[quad_idx];
@@ -202,14 +236,19 @@ impl BatchBvndInner {
 
             let tv_pack_quad = select_quadrature_padded(rho.abs());
             debug_assert!(tv_pack_quad.len() == 10);
-            // Note: We want to generate the x's in monotonically
+
+            // Expand tv_pack_quad to a full list of 20 points, in sorted order of x.
+            //
+            // We want to generate the x's in monotonically
             // decreasing order because it simplifies loop exit criteria
-            // So we don't use the tvpack ordering
+            // So we don't use the `tvpack` ordering:
+            //
             // for (w, x) in select_quadrature(rho.abs()) {
             //    for is in [-1.0, 1.0] {
+            //
             // The x's are negative and start close to -.99, and a is positive and close to 1.
-            // So starting with is = -1.0 and iterating will start with the largest x and go to smallest.
-            // When we then do is = 1.0, we go in reverse order.
+            // So starting with is = -1.0 and iterating in order will start with the largest x.
+            // Once those are exhausted, we do is = 1.0, and iterate in reverse order.
             let temp: [(f64, f64); 20] = core::array::from_fn(|idx| {
                 if idx < 10 {
                     let (w, x) = tv_pack_quad[idx];
@@ -230,12 +269,18 @@ impl BatchBvndInner {
                 let mut quad = Quad2::default();
                 for idx2 in 0..4 {
                     let (w, x) = temp[idx * 4 + idx2];
+                    // Note: a_s = 1 - rho^2, and 0.925 <= |rho| < 1.
+                    // So 0 <= a_s <= 0.144375
+                    // and 0 <= a <= 0.37996
                     let a = a * 0.5; // See tvpack before quadrature starts
+                    // Quadrature points are (-0.993, 0.993) so after this line, x in [0, ~0.37)
                     let x = a * (x + 1.0);
+                    // 0 <= x_s <= ~0.142
                     let x_s = x * x;
                     let r_s = sqrt(1.0 - x_s);
                     let w = w * a;
 
+                    // x_s_inv is at least 7.0, and can get arbitrarily large as rho approaches 1.
                     let x_s_inv = x_s.recip();
                     let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
                     let r_s_inv = r_s.recip();
@@ -286,6 +331,10 @@ impl BatchBvndInner {
         phid_minus_dh: f64,
         phid_minus_dk: f64,
     ) -> f64 {
+        if dh == f64::INFINITY || dk == f64::INFINITY {
+            return 0.0;
+        }
+
         match self {
             Self::RhoMinus1 => {
                 if dk > dh {
@@ -345,13 +394,52 @@ impl BatchBvndInner {
                     bvn -= exp(-0.5 * hk) * SQRT_2_PI * phid(-b * a_inv) * b * (1.0 - b_s * common);
                 }
 
-                // This threshold comes from tvpack algorithm
-                // Performance improves if we hoist it out of the loop and precompute the stopping point
+                // This threshold comes from tvpack algorithm:
+                //
+                // ASR = -( BS/XS + HK )/2
+                // IF ( ASR .GT. -100 ) THEN
+                //   BVN = BVN + A*W(I,NG)*EXP( ASR )
+                //          * ...
+                //
+                // If asr <= -100, then exp(asr) is very small and we can skip evaluating this point.
+                //
+                // In our version, we've sorted the points so that 1/x_s is increasing, and asr is decreasing.
+                // So once we skip any point, we can skip all remaining points.
+                //
+                // Once we do simd, we don't evaluate it for every point, we only do it for every fourth point.
+                // If we evaluate some extra quadrature points as a byproduct of simd, and their contribution
+                // to the sum is negligible, no big deal.
+                //
+                // Performance improves if we hoist it out of the loop and precompute the stopping point.
+                // `quadrature` only has 5 elements, so this `partition_point` is pretty fast.
+                //
+                // We have:
+                // -1/2 * (bs/xs + hk) > -100
+                // bs/xs + hk < 200
+                // bs/xs < 200 - hk
+                // 1/xs < (200 - hk) / bs
+                //
+                // The last equivalence is valid because b_s is a square, so dividing it doesn't change signs.
+                // Even if it is zero, ieee requires that the result is +infinity or -infinity
+                // However, it's probably not faster to do it that way, since fp division can be like 20-30 cycles,
+                // while fp multiplication is typically 1-2 cycles.
                 {
                     let limit = quadrature
-                        .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] <= (200.0 - hk));
+                        .iter()
+                        .position(|q2| b_s * q2.x_s_inv.as_array_ref()[0] >= (200.0 - hk))
+                        .unwrap_or(5);
+                    // let limit = quadrature
+                    //    .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] < (200.0 - hk));
+                    /* Experiment:
+                    // Actually only do the first 4 checks, and if all 4 are required, assume the last is as well,
+                    // because the marginal cost to do the 5th is not that much, but going from 5 to 4 for binary search
+                    // avoids an entire comparison.
 
-                    // Hoisting these out manually in case the compiler cannot see that limit > 0
+                    let mut limit = quadrature[..4]
+                        .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] < (200.0 - hk));
+                    limit += limit >> 2; // If the result was 4, then make it 5, otherwise leave it alone
+                    */
+
                     let minus_hk = f64x4::splat(-hk);
                     let b_s = f64x4::splat(b_s);
                     let c = f64x4::splat(c);

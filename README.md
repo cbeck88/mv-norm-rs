@@ -1,16 +1,16 @@
 mv-norm
 =======
 
-This rust crate contains functions related to [multivariate normal distributions](https://en.wikipedia.org/wiki/Multivariate_normal_distribution), especially, computing the CDF. (Note: Right now we only have the bivariate normal CDF.)
+*Fast* and *accurate* calcluations related to [multivariate normal distributions](https://en.wikipedia.org/wiki/Multivariate_normal_distribution), especially, computing the CDF. (Note: Right now we only have the bivariate normal CDF.)
 
-It ports a subset of the [R package `mvtnorm`](https://cran.r-project.org/web/packages/mvtnorm/mvtnorm.pdf), which is
+This rust crate ports a subset of the [R package `mvtnorm`](https://cran.r-project.org/web/packages/mvtnorm/mvtnorm.pdf), which is
 widely used for these purposes.
 
 Additionally, for some functions, this crate provides an alternative "batch evaluation" API.
 
 For example, the `BatchBvnd` context object enables evaluating the bivariate normal CDF with up to ten times higher
 throughput, through the use of precomputation and SIMD optimizations. This implementation was derived
-from the `bvnd` function in [Alan Genz' tvpack fortran algorithm](https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514), and is tested against it for fidelity.
+from the `bvnd` function in [Alan Genz' `tvpack` fortran algorithm](https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514), and is tested against it for fidelity.
 
 Comparisons
 -----------
@@ -34,7 +34,7 @@ The Owen's T method, using the [Patefield-Tandy algorithm](https://www.jstatsoft
 * For one-off, single point evaluations, both methods give comparable results, and which is better will depend mostly on what values of `rho` you have in your application.
 * When we try to apply SIMD optimizations, however, the `tvpack` algorithm has an advantage.
    * It is difficult to use SIMD optimizations in the context of Patefield-Tandy because the most important routines are based on evaluating some number of terms of an alternating series, and the later terms depend on the values computed for the earlier terms. This computation is inherently sequential -- we can't easily compute 4 or 8 terms simultaneously. We could instead try to batch evaluate 4 or 8 different points of Owen's T simultaneously, but then we have the problem that they might fall in different regions and the Patefield-Tandy classifier might select different series for all of them.
-   * By contrast, the `tvpack` approach only has two algorithms, and is always quadrature-based. [Quadrature](https://en.wikipedia.org/wiki/Gaussian_quadrature) is more amenable to SIMD since we can try to evaluate multiple points of the quadrature simultaneously, and this will even improve the performance of single-point evaluations.
+   * By contrast, `tvpack` only contains two algorithms, and is always quadrature-based. [Quadrature](https://en.wikipedia.org/wiki/Gaussian_quadrature) is more amenable to SIMD since we can try to evaluate multiple points of the quadrature simultaneously, and this will even improve the performance of single-point evaluations.
 
 The `tvpack` algorithm can also benefit significantly from precomputation if `rho` is known in advance and, e.g., we will evaluate `bvnd` at all `(x,y)` points in a grid. In these cases, several functions of `rho` can be computed only once and cached, and the univariate normal CDF can be computed for each `x` and `y` once, and then reused. Evaluating `(x,y)` pairs from a grid, across only a few values of `rho`, fits my motivating use-case exactly.
 
