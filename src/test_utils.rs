@@ -1,3 +1,11 @@
+use rand::{Rng, SeedableRng};
+use rand_pcg::Pcg64Mcg;
+
+pub fn to_three_decimals(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
+}
+
+/// Test point for bivariate normal distribution CDF values.
 pub struct BvndTestPoint {
     pub x: f64,
     pub y: f64,
@@ -12,19 +20,35 @@ impl From<&(f64, f64, f64, f64)> for BvndTestPoint {
     }
 }
 
+pub fn get_owens_t_value_burkardt_test_points() -> impl Iterator<Item = BvndTestPoint> {
+    (0..N_MAX).map(|i| {
+        let x = -X_VEC[i];
+        let y = -Y_VEC[i];
+        let r = R_VEC[i];
+        let expected = owens_t::biv_norm(x, y, r);
+        BvndTestPoint { x, y, r, expected }
+    })
+}
+
 // Ensure test coverage on the part of the algorithm where rho > 0.925
-pub fn get_additional_test_points() -> impl Iterator<Item = BvndTestPoint> {
-    const POINTS: [(f64, f64, f64, f64); 1] = [
-        (1.0, 1.0, 0.99, 0.8276930269850803),
-        //(-1.0, 1.0, 0.99, 0.8276930269850803),
-    ];
-    (&POINTS[..]).iter().map(Into::into)
+pub fn get_random_owens_t_test_points() -> impl Iterator<Item = BvndTestPoint> {
+    let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+    (0..1000).map(move |_| {
+        let x = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+        let y = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+        let r = to_three_decimals(rng.random::<f64>());
+        let expected = owens_t::biv_norm(x, y, r);
+        BvndTestPoint { x, y, r, expected }
+    })
 }
 
 pub fn get_burkardt_nbs_test_points() -> impl Iterator<Item = BvndTestPoint> {
+    // NOTE: Burkardt's vectors are for Pr[ X < x, Y < y], while we are trying to solve
+    // Pr [ X > x, Y > y]
     (0..N_MAX).map(|i| BvndTestPoint {
-        x: X_VEC[i],
-        y: Y_VEC[i],
+        x: -X_VEC[i],
+        y: -Y_VEC[i],
         r: R_VEC[i],
         expected: FXY_VEC[i],
     })

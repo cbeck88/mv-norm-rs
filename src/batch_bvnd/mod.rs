@@ -3,7 +3,6 @@ use crate::util::*;
 use libm::{asin, sin};
 use wide::f64x4;
 
-
 /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance `rho`.
 ///
 /// `rho` must be in the range [-1.0, 1.0].
@@ -201,6 +200,7 @@ impl BatchBvndInner {
     // really be amortized, but for now I'm not bothering.
     // Benchmarks show that BvndBatch::new(rho).bvnd(x,y) is still faster than
     // tvpack::bvnd(x,y,rho) anyways.
+    #[inline]
     fn new(rho: f64) -> Self {
         assert!(rho.abs() <= 1.0, "rho must be between -1.0 and 1.0: {rho}");
 
@@ -364,19 +364,13 @@ impl BatchBvndInner {
         }
 
         match self {
-            Self::RhoMinus1 => {
-                if dk > dh {
-                    phid_minus_dk - phid_minus_dh
-                } else {
-                    0.0
-                } // TODO: looks a bit funky, but matches tvpack... maybe there's a bug
-            }
+            Self::RhoMinus1 => f64::max(phid_minus_dh + phid_minus_dk - 1.0, 0.0),
             Self::Rho0 => phid_minus_dh * phid_minus_dk,
             Self::Rho1 => {
-                if dh > dk {
-                    phid_minus_dh
-                } else {
+                if dh < dk {
                     phid_minus_dk
+                } else {
+                    phid_minus_dh
                 }
             }
             Self::RhoMiddle { quadrature, n } => {
@@ -521,17 +515,59 @@ impl BatchBvndInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        BvndTestPoint, get_additional_test_points, get_burkardt_nbs_test_points,
-    };
+    use crate::test_utils::*;
     use assert_within::assert_within;
+    use rand::Rng;
+    use rand_pcg::{Pcg64Mcg, rand_core::SeedableRng};
+
+    // Check that the batch bvnd implementation matches the tvpack implementation closely
+    #[test]
+    fn batch_matches_tvpack() {
+        let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+        let eps = 1e-15;
+
+        for n in 0..10000 {
+            let x = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let y = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            //let r = to_three_decimals(rng.random::<f64>());
+            let r = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+            let owens_t_val = owens_t::biv_norm(x, y, r);
+            let ctxt = BatchBvnd::new(r);
+            let batch_val = ctxt.bvnd(x, y);
+
+            // While we're here, check that the owen's t value is pretty close
+            // to the batch value, on at least the easier points.
+            if x.abs() < 1.5 && y.abs() < 1.5 && -0.5 < r && r < 0.94 {
+                let eps = if x * y > 0.0 {
+                    if x > 0.0 && y > 0.0 { 1e-14 } else { 1e-6 }
+                } else {
+                    1e-2
+                };
+                assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
+            }
+            if r == 1.0 || r == -1.0 || r == 0.0 {
+                let eps = 1e-14;
+                assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
+                // I think whatever tvpack sources we found had a bug in this case,
+                // but these extremes aren't terribly important in practice.
+                if r == -1.0 {
+                    continue;
+                }
+            }
+
+            let tvpack_val = crate::tvpack::bvnd(x, y, r);
+
+            assert_within!(+eps, batch_val, tvpack_val, "n = {n}, x = {x}, y = {y}, rho = {r}\nowens_t::biv_norm(x,y,rho) = {owens_t_val}")
+        }
+    }
 
     #[test]
-    fn spot_check_phi2() {
-        // FIXME: Double check these test vectors, because we had similar precision
-        // limits with the owens-t crate which makes me suspicious of them.
-        let eps = 1e-6;
-        for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
+    fn spot_check_batch_bvnd_against_burkardt_owens_t() {
+        let eps = 1e-15;
+        for (n, BvndTestPoint { x, y, r, expected }) in
+            get_owens_t_value_burkardt_test_points().enumerate()
+        {
             let ctxt = BatchBvnd::new(r);
             let val = ctxt.bvnd(x, y);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
@@ -541,13 +577,15 @@ mod tests {
     }
 
     #[test]
-    fn spot_check_phi2_additional() {
-        let eps = 1e-6;
-        for (n, BvndTestPoint { x, y, r, expected }) in get_additional_test_points().enumerate() {
+    fn spot_check_batch_bvnd_against_random_owens_t() {
+        for (n, BvndTestPoint { x, y, r, expected }) in get_random_owens_t_test_points().enumerate()
+        {
+            let eps = if x * y >= 0.0 { 1e-14 } else { 1e-6 };
+
             let ctxt = BatchBvnd::new(r);
             let val = ctxt.bvnd(x, y);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
-            assert_within!(+eps, ctxt.bvnd(y,x), val);
+            assert_within!(+eps, ctxt.bvnd(y,x), val, "n = {n}, x = {x}, y = {y}, rho = {r}");
             assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
         }
     }

@@ -70,7 +70,7 @@ Compared to the `mvtnorm` R package and the existing `numpy` translations of the
 * The hot loop on the slowest path performs a test to decide if it should bother evaluating a particular quadrature point, or skip it.
   * By sorting the quadrature points, we are able to do the most important ones first and bail out of the loop entirely once the test fails once, rather than continuing and applying the test to more points.
   * We can pre-compute exactly how many passes through the loop we will make, and then avoid additional branching in the loop at all. Branching within the loop can prevent the compiler from vectorizing the loop automatically, but this is what most implementations are doing.
-* The hot loop evaluates `exp` on several arguments, and compilers appear to run away from this and not attempt to vectorize it. By using a SIMD helper crate ([`wide`](https://crates.io/crates/wide)) we can ensure that `exp` is computed in a vectorized fashion and that the whole hot loop works as intended.
+* The hot loop evaluates `exp` on several arguments, and compilers appear to run away from this and don't attempt to vectorize it. By using a SIMD helper crate ([`wide`](https://crates.io/crates/wide)) we can ensure that `exp` is computed in a vectorized fashion and that the whole hot loop works as intended.
 
 ## Future Directions
 

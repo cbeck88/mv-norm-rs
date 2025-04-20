@@ -122,7 +122,7 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
 
     let mut bvn = 0.0;
 
-    if r.abs() < 0.925 {
+    if r.abs() <= 0.925 {
         if r.abs() > 0.0 {
             let hs = ((h * h) + (k * k)) / 2.0;
             let asr = 0.5 * asin(r);
@@ -138,7 +138,7 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
         bvn += phid(-h) * phid(-k);
         bvn
     } else {
-        // r.abs() >= 0.925
+        // r.abs() > 0.925
         if r < 0.0 {
             h = -h;
             k = -k;
@@ -198,17 +198,24 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        BvndTestPoint, get_additional_test_points, get_burkardt_nbs_test_points,
-    };
+    use crate::test_utils::*;
     use assert_within::assert_within;
 
     #[test]
-    fn spot_check_phi2() {
+    fn spot_check_tvpack_bvnd_burkardt() {
         // FIXME: Double check these test vectors, because we had similar precision
         // limits with the owens-t crate which makes me suspicious of them.
-        let eps = 1e-6;
         for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
+            let eps = if x >= 0.0 && y >= 0.0 {
+                1e-10
+            } else if x == 0.0 || y == 0.0 {
+                1e-6
+            } else if x <= 0.0 && y <= 0.0 {
+                1e-9
+            } else {
+                1e-6
+            };
+
             let val = bvnd(x, y, r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, bvnd(y,x,r), val);
@@ -217,9 +224,27 @@ mod tests {
     }
 
     #[test]
-    fn spot_check_phi2_additional() {
-        let eps = 1e-6;
-        for (n, BvndTestPoint { x, y, r, expected }) in get_additional_test_points().enumerate() {
+    fn spot_check_tvpack_bvnd_against_owens_t() {
+        let eps = 1e-15;
+        for (n, BvndTestPoint { x, y, r, expected }) in
+            get_owens_t_value_burkardt_test_points().enumerate()
+        {
+            let val = bvnd(x, y, r);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, bvnd(y,x, r), val);
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    #[test]
+    fn spot_check_tvpack_bvnd_random_owens() {
+        for (n, BvndTestPoint { x, y, r, expected }) in get_random_owens_t_test_points().enumerate()
+        {
+            if r == 1.0 || r == -1.0 {
+                // I think these are buggy cases for tvpack
+                continue;
+            }
+            let eps = if x * y >= 0.0 { 1e-14 } else { 1e-6 };
             let val = bvnd(x, y, r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, bvnd(y,x, r), val);

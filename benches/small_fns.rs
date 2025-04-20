@@ -243,5 +243,9 @@ criterion_group!(our_batch, bvnd_batch, bvnd_batch_wider, bvnd_batch_099_2);
 criterion_group!(our_grid_eval, bvnd_grid<50>, bvnd_grid<100>,);
 
 criterion_main!(
-    /*builtins, libm,*/ bvnd_single /*, our_batch, our_grid_eval*/
+    //builtins,
+    //libm,
+    //bvnd_single,
+    //our_batch,
+    our_grid_eval
 );

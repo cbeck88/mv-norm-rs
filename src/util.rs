@@ -35,7 +35,7 @@ pub fn sqrt(x: f64) -> f64 {
 //
 // In mvtnorm, they call out to the r version of this instead, although there is
 // a historical fortran version.
-// We use the libm version here.
+// We use a version based on libm here.
 pub fn phid(x: f64) -> f64 {
-    0.5 * libm::erfc(x * FRAC_1_SQRT_2)
+    0.5 + 0.5 * libm::erf(x * FRAC_1_SQRT_2)
 }
