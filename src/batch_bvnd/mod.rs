@@ -493,6 +493,7 @@ impl BatchBvndInner {
                 if *rho > 0.0 {
                     let h = dh;
                     let k = dk;
+                    // bvn += phid(-f64::max(h, k));
                     if h > k {
                         bvn += phid_minus_dh;
                     } else {
@@ -500,11 +501,22 @@ impl BatchBvndInner {
                     }
                 } else {
                     bvn = -bvn;
-                    let h = -dh;
-                    let k = -dk;
+                    // FIXME: This seems to be the only part of the whole function that
+                    // isn't symmetric if h and k are swapped, which indicates
+                    // that it is likely wrong.
+                    // Also, in the limit that rho -> -1, a -> 0, and phid(-b/a) -> 0,
+                    // and x -> 0, which kills off every other term.
+                    //
+                    // But we're pretty sure that the right answer when rho = -1 is
+                    // f64::max(phid_minus_dh + phid_minus_dk - 1.0, 0.0)
+                    // So continuity requires that we do something here that has that
+                    // as a limit.
+
+                    /* old code:
                     if k > h {
                         bvn += phid_minus_dk - phid_minus_dh
-                    }
+                    }*/
+                    bvn += f64::max(phid_minus_dh + phid_minus_dk - 1.0, 0.0);
                 }
                 bvn
             }
@@ -538,27 +550,43 @@ mod tests {
 
             // While we're here, check that the owen's t value is pretty close
             // to the batch value, on at least the easier points.
-            if x.abs() < 1.5 && y.abs() < 1.5 && -0.5 < r && r < 0.94 {
-                let eps = if x * y > 0.0 {
-                    if x > 0.0 && y > 0.0 { 1e-14 } else { 1e-6 }
+            if (x.abs() < 1.75 && y.abs() < 1.75) && -0.928 < r {
+                let eps = if x * y > 0.0 || (x-y).abs() < 1.9 {
+                    1e-15
                 } else {
-                    1e-2
+                    2e-5
                 };
                 assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
             }
             if r == 1.0 || r == -1.0 || r == 0.0 {
-                let eps = 1e-14;
                 assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
-                // I think whatever tvpack sources we found had a bug in this case,
-                // but these extremes aren't terribly important in practice.
-                if r == -1.0 {
-                    continue;
-                }
+            }
+
+            // I think whatever tvpack sources we found had a bug in this case,
+            // but these extremes aren't terribly important in practice.
+            if r <= -0.924 {
+                // We decided to change the expression for the case rho <= -0.925,
+                // because the tvpack behavior wasn't symmetric wrt x and y, and looked incorrect,
+                // and disagreed with owen's T and other results. So we don't match tvpack there anymore,
+                // or at least whatever version of tvpack was used in the mvtnorm package.
+                continue;
             }
 
             let tvpack_val = crate::tvpack::bvnd(x, y, r);
 
             assert_within!(+eps, batch_val, tvpack_val, "n = {n}, x = {x}, y = {y}, rho = {r}\nowens_t::biv_norm(x,y,rho) = {owens_t_val}")
+        }
+    }
+
+    #[test]
+    fn spot_check_batch_bvnd_against_burkardt_points() {
+        let eps = 1e-6;
+        for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, ctxt.bvnd(y,x), val);
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
         }
     }
 
