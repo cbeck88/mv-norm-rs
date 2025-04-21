@@ -1,6 +1,6 @@
 use crate::tvpack::select_quadrature_padded;
 use crate::util::*;
-use libm::{asin, sin};
+use libm::asin;
 use wide::f64x4;
 
 // Return phi(-x) = 1 - phi(x) = 0.5 erfc (x / sqrt(2))
@@ -28,6 +28,7 @@ fn checked_phid_minus(x: f64) -> f64 {
 ///
 /// * allocate a `BatchBvnd` object somewhere else and call `bvnd` on it
 /// * use `tvpack::bvnd` instead, but it won't have SIMD optimizations then.
+/// * use `owens_t::biv_norm` instead
 #[inline]
 pub fn bvnd(x: f64, y: f64, rho: f64) -> f64 {
     BatchBvnd::new(rho).bvnd(x, y)
@@ -251,23 +252,26 @@ impl BatchBvndInner {
             // there is the 1-x and the 1+x version. That makes four quadrature points,
             // which are processed and stored in simd vectors for a single Quad1 object.
             // There are either 2, 3, or 5 Quad1 objects produced, depending on the value of n.
-            let mut quadrature = [Quad1::default(); 5];
-            for quad_idx in 0..n {
-                let quad = &mut quadrature[quad_idx];
-                for pair_idx in 0..2 {
-                    let (w, x) = tv_pack_quad[2 * quad_idx + pair_idx];
-                    for (sign_idx, is) in [-1.0, 1.0].iter().enumerate() {
-                        let sn = sin(asr * (is * x + 1.0));
-                        let denom_inv = (1.0 - sn * sn).recip();
-                        let w = w * asr * FRAC_1_2_PI;
-
-                        let idx = 2 * pair_idx + sign_idx;
-                        quad.sn.as_array_mut()[idx] = sn;
-                        quad.denom_inv.as_array_mut()[idx] = denom_inv;
-                        quad.w.as_array_mut()[idx] = w;
-                    }
+            let asr = f64x4::splat(asr);
+            let quadrature: [Quad1; 5] = core::array::from_fn(|quad_idx| {
+                if quad_idx >= n { return Quad1::default(); }
+                // Expanded (with signs) weights and positions from tvpack quad, in simd register
+                let (w,x) = {
+                    let (w0, x0) = tv_pack_quad[2 * quad_idx];
+                    let (w1, x1) = tv_pack_quad[2 * quad_idx + 1];
+                    let w = f64x4::new([w0, w0, w1, w1]);
+                    let x = f64x4::new([-x0, x0, -x1, x1]);
+                    (w,x)
+                };
+                let sn = (asr * (x + f64x4::ONE)).sin();
+                let denom_inv = f64x4::ONE / (f64x4::ONE - (sn * sn));
+                let w = w * asr * f64x4::new([FRAC_1_2_PI; 4]);
+                Quad1 {
+                    sn,
+                    denom_inv,
+                    w,
                 }
-            }
+            });
 
             Self::RhoMiddle { quadrature, n }
         } else {
@@ -394,7 +398,7 @@ impl BatchBvndInner {
 
                 let mut bvn = 0.0;
                 for Quad1 { sn, denom_inv, w } in quadrature.iter().take(*n) {
-                    bvn += (*w * ((*sn * hk - hs) * denom_inv).exp()).reduce_add();
+                    bvn += (*w * ((sn.mul_sub(hk, hs) * denom_inv).exp())).reduce_add();
                 }
                 // Note: bvn *= asr * FRAC_1_2_PI was folded into w
                 bvn += phid_minus_dh * phid_minus_dk;
@@ -772,7 +776,7 @@ mod tests {
 
             for i in 0..m {
                 for j in 0..m {
-                    assert_within!(+eps, out[(j+1)*(m + 1) + (i + 1)], crate::tvpack::bvnd(xs[i],ys[j],r), "i = {i}, j = {j}, xs[i] = {}, ys[j] = {}", xs[i], ys[j]);
+                    assert_within!(+eps, out[(j+1)*(m + 1) + (i + 1)], crate::tvpack::bvnd(xs[i],ys[j],r), "n = {n}, i = {i}, j = {j}, xs[i] = {}, ys[j] = {}", xs[i], ys[j]);
                 }
             }
         }
