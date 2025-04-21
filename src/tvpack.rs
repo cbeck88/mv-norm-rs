@@ -67,6 +67,18 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
     }
 }
 
+// phid: Pr(N(0,1) < x)
+//
+// tvpack relies on phid, a double precision normal cdf function.
+//
+// In mvtnorm, they call out to the r version of this instead, although there is
+// a historical fortran version.
+// We use a version based on libm here.
+#[inline(always)]
+fn phid(x: f64) -> f64 {
+    0.5 * libm::erfc(-x * FRAC_1_SQRT_2)
+}
+
 /// Rust port of tvpack fortran function bvnd.
 ///
 /// Note that this is basically a transliteration, and doesn't use SIMD or make
@@ -126,6 +138,7 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
         bvn
     } else {
         // r.abs() > 0.925
+        // flip k when r < 0.0
         let (k, hk) = if r < 0.0 { (-k, -hk) } else { (k, hk) };
         if r.abs() < 1.0 {
             let a_s = (1.0 - r) * (1.0 + r);

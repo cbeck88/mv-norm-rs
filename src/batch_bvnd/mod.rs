@@ -1,17 +1,39 @@
 use crate::tvpack::select_quadrature_padded;
 use crate::util::*;
 use libm::asin;
-use wide::f64x4;
+use wide::{CmpGt, f64x4};
 
 // Return phi(-x) = 1 - phi(x) = 0.5 erfc (x / sqrt(2))
-// to double precision, and check for x = infinity.
+// to double precision, and check for x = +/- infinity.
+// Turns out, libm actually does that already
 #[inline(always)]
 fn checked_phid_minus(x: f64) -> f64 {
-    if x == f64::INFINITY {
-        0.0
-    } else {
-        0.5 * libm::erfc(x * FRAC_1_SQRT_2)
+    0.5 * libm::erfc(x * FRAC_1_SQRT_2)
+}
+
+/// Count how many lanes of a simd vector are > threshold
+/// An integer between 0 and 4.
+#[inline(always)]
+fn count_greater(v: f64x4, threshold: f64) -> usize {
+    let comparison = v.cmp_gt(threshold);
+    // This comparison produces all 0s or all 1 bit patterns. The all 1 bit pattern is a nan,
+    // so we need to mask it with 1.0
+
+    let result = (comparison & f64x4::new([1.0; 4])).reduce_add() as usize;
+
+    if result > 4 {
+        #[cfg(debug_assertions)]
+        {
+            unreachable!("result should have been <= 4: {comparison}, {result}");
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { core::hint::unreachable_unchecked() }
+        }
     }
+
+    result
 }
 
 /// Evaluate `Pr[ X > x, Y > y ]` for X, Y standard normals of correlation coefficient `rho`.
@@ -19,7 +41,8 @@ fn checked_phid_minus(x: f64) -> f64 {
 /// `rho` must be in the range [-1.0, 1.0].
 ///
 /// If `x` or `y` equals +∞, the result will be `0.0`.
-/// If `x` or `y` equals -∞, the result is unspecified.
+/// If `x` or `y` equals -∞, the result will be a univariate CDF value corresponding to the other parameter.
+/// If both are -∞ the result will be `1.0`.
 ///
 /// *Note*: This function uses just about 1kb of stack memory.
 /// Typical programs have 4-8kb of stack, so this should usually be fine.
@@ -55,20 +78,21 @@ impl BatchBvnd {
     /// Evaluate `Pr[ X > x, Y > y ]` for X, Y standard normals of correlation coefficient `rho`.
     ///
     /// If `x` or `y` = +∞, the result will be `0.0`.
-    /// If `x` or `y` = -∞, the result is unspecified.
+    /// If `x` or `y` = -∞, the result will be the value of the univariate CDF at the location of the other parameter.
+    /// If both are -∞, the result will be `1.0`.
     #[inline]
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
         self.inner.bvnd(x, y)
     }
 
-    /// Same as bvnd, but faster if you already know values of phi(-x), phi(-y).
+    /// Same as bvnd, but faster if you already know values of `phi(-x)`, `phi(-y)`.
     /// Note that no checking of the values you provide is performed.
     ///
     /// Here `phi(-z) := 0.5 erfc(z/sqrt(2))`
     ///
-    /// If you know the standard normal CDF value of z or -z already then you probably have
+    /// If you know the standard normal CDF value of z or -z, then you probably already have
     /// a decent value for phi.
-    pub fn bvnd_with_precomputed_phid(
+    pub fn bvnd_with_precomputed_phi(
         &self,
         x: f64,
         y: f64,
@@ -76,20 +100,21 @@ impl BatchBvnd {
         phi_minus_y: f64,
     ) -> f64 {
         self.inner
-            .bvnd_with_precomputed_phid(x, y, phi_minus_x, phi_minus_y)
+            .bvnd_with_precomputed_phi(x, y, phi_minus_x, phi_minus_y)
     }
 
-    /// Batch evaluate bvnd at all points of a grid.
-    /// This computes and reuses values of phi, which improves performance noticeably for large grids,
-    /// and is relatively easy to use from the caller's perspective.
+    /// Batch evaluate `bvnd` at all points of a grid.
+    /// This computes and reuses values of `phi`, the univariate normal CDF,
+    /// which improves performance significantly for large grids,
+    /// while keeping the API relatively easy to use from the caller's perspective.
     ///
     /// This routine does not allocate, but uses an output parameter to store results.
     ///
     /// *Input*:
     ///
-    /// * `xs`: A slice of f64 values
-    /// * `ys`: A slice of f64 values
-    /// * `out`: A mutable slice of f64 values.
+    /// * `xs`: The x-values of the grid, as `&[f64]`
+    /// * `ys`: The y-values of the grid, as `&[f64]`
+    /// * `out`: A `&mut[f64]` where computed values are stored.
     ///
     /// *Pre-conditions*:
     ///
@@ -97,22 +122,22 @@ impl BatchBvnd {
     /// * In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
     ///
     /// * You may pass +∞ as an element of `xs` or `ys`, and that row or column will be entirely 0.0.
-    /// * If you pass -∞, the behavior in that row or column is unspecified.
+    /// * If you pass -∞, that row or column will just be a duplicate of the 0th row or column.
     ///
     /// *Post-conditions*:
     ///
     /// * The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
-    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thought of *with those imaginary entries*.
+    ///   Then, `out[y_idx][x_idx] = bvnd(xs'[x_idx], ys'[y_idx])`, where `xs'` `ys'` are `xs` and `ys` *with those imaginary entries*.
     ///
     ///   * Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
     ///
-    /// * In other words, to find the answer to the query corresponding to `(x_idx, y_idx)` in the input slices,
+    /// * In other words, to find the answer to the query corresponding to indices `(x_idx, y_idx)` in the input data,
     ///   you have to add 1 to `x_idx` and to `y_idx` when you go to the output. The entries in row 0 or column 0 of
     ///   the output are special, and correspond to `x` or `y` being -∞.
     ///
-    /// * When `x` or `y` is -∞, the bivariate normal cdf degenerates to the univariate normal cdf. So,
-    ///   * `out[0][x_idx] = Pr[ X > xs[x_idx] ] = phi(-xs[x_idx])`
-    ///   * `out[y_idx][0] = Pr[ Y > ys[y_idx] ] = phi(-ys[y_idx])`
+    /// * When `x` or `y` is -∞, the bivariate normal cdf degenerates to the univariate normal cdf, `phi`. So,
+    ///   * `out[0][x_idx] = Pr[ X > xs'[x_idx] ] = phi(-xs'[x_idx])`
+    ///   * `out[y_idx][0] = Pr[ Y > ys'[y_idx] ] = phi(-ys'[y_idx])`
     ///   * `out[0][0]` will always be `1.0`.
     ///
     /// * When `x` or `y` is ∞, the result will be `0.0`.
@@ -120,7 +145,7 @@ impl BatchBvnd {
         let xn = xs.len();
         let yn = ys.len();
 
-        debug_assert!(
+        assert!(
             out.len() == (xn + 1) * (yn + 1),
             "Invalid output buffer length: {} != {} = ({xn} + 1) * ({yn} + 1)",
             out.len(),
@@ -140,7 +165,7 @@ impl BatchBvnd {
             for i in 0..xn {
                 let phid_x = out[1 + i];
                 out[stride * (j + 1) + (i + 1)] =
-                    self.bvnd_with_precomputed_phid(xs[i], ys[j], phid_x, phid_y);
+                    self.bvnd_with_precomputed_phi(xs[i], ys[j], phid_x, phid_y);
             }
         }
     }
@@ -173,6 +198,9 @@ enum BatchBvndInner {
         a: f64,
         // a_inv = 1.0 / a
         a_inv: f64,
+        // the values of the first four values of Quad2.minus_one_over_two_x_s[0],
+        // packed into a f64x4. This is used when deciding how many quadrature points to evaluate.
+        limit_multipliers: f64x4,
         // Precomputed quadrature values, dependent on the value of rho
         // =20 points, in chunks of 4
         quadrature: [Quad2; 5],
@@ -347,23 +375,28 @@ impl BatchBvndInner {
                 }
             });
 
+            let limit_multipliers = f64x4::new(core::array::from_fn(|idx| {
+                quadrature[idx].minus_one_over_two_x_s.as_array_ref()[0]
+            }));
+
             Self::RhoOther {
                 rho,
                 a_s,
                 a,
                 a_inv,
+                limit_multipliers,
                 quadrature,
             }
         }
     }
 
     fn bvnd(&self, dh: f64, dk: f64) -> f64 {
-        self.bvnd_with_precomputed_phid(dh, dk, checked_phid_minus(dh), checked_phid_minus(dk))
+        self.bvnd_with_precomputed_phi(dh, dk, checked_phid_minus(dh), checked_phid_minus(dk))
     }
 
     // Compute bvnd, using precomputed values of phid(-dh), phid(-dk)
     #[inline(always)]
-    fn bvnd_with_precomputed_phid(
+    fn bvnd_with_precomputed_phi(
         &self,
         dh: f64,
         dk: f64,
@@ -412,6 +445,7 @@ impl BatchBvndInner {
                 a_s,
                 a,
                 a_inv,
+                limit_multipliers,
                 quadrature,
             } => {
                 // We use the following identity to reduce rho <= -0.925 inputs to rho <= 0.925:
@@ -445,7 +479,14 @@ impl BatchBvndInner {
                 }
                 if -hk < 100.0 {
                     let b = b.abs();
-                    bvn -= exp(-0.5 * hk) * SQRT_2_PI * phid(-b * a_inv) * b * (1.0 - b_s * common);
+                    // Note: We replaced original fortran call to phid(-b / a) with checked_phid_minus(b/a)
+                    // because we know b and a are positive, so this is regime where erfc would be more accurate
+                    // than erf anyways, and we don't have any other need for the phid function.
+                    bvn -= exp(-0.5 * hk)
+                        * SQRT_2_PI
+                        * checked_phid_minus(b * a_inv)
+                        * b
+                        * (1.0 - b_s * common);
                 }
 
                 // This threshold comes from tvpack algorithm:
@@ -466,6 +507,7 @@ impl BatchBvndInner {
                 //
                 // Performance improves if we hoist it out of the loop and precompute the stopping point.
                 // `quadrature` only has 5 elements, so this `partition_point` is pretty fast.
+                // However, we can do even better if we use simd to compare, and then we don't have branching and loops here.
                 //
                 // We have:
                 // -1/2 * (bs/xs + hk) > -100
@@ -479,6 +521,16 @@ impl BatchBvndInner {
                 // while fp multiplication is typically 1-2 cycles. If the quadrature array were like hundreds of elements,
                 // then it's probably better to do that, and then do binary search.
                 {
+                    let half_hk = f64x4::splat(hk * 0.5);
+                    let b_s = f64x4::splat(b_s);
+
+                    let mut limit = count_greater(b_s.mul_sub(*limit_multipliers, half_hk), -100.0);
+                    assert!(limit <= 4);
+                    limit += limit >> 2; // if limit == 4, limit += 1;
+                    // We're adding one when limit == 4 because, normally, we would test against the value of the fifth quad also,
+                    // but we can't fold that into a simd, so instead we just skip that comparison, and assume that if the 4th was
+                    // necessary then probably the fifth is also.
+                    /*
                     let minus_100_plus_half_hk = -100.0 + hk * 0.5;
                     let limit = quadrature
                         .iter()
@@ -486,7 +538,7 @@ impl BatchBvndInner {
                             b_s * q2.minus_one_over_two_x_s.as_array_ref()[0]
                                 <= minus_100_plus_half_hk
                         })
-                        .unwrap_or(5);
+                        .unwrap_or(5);*/
                     // let limit = quadrature
                     //    .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] < (200.0 - hk));
                     /* Experiment:
@@ -499,8 +551,6 @@ impl BatchBvndInner {
                     limit += limit >> 2; // If the result was 4, then make it 5, otherwise leave it alone
                     */
 
-                    let half_hk = f64x4::splat(hk * 0.5);
-                    let b_s = f64x4::splat(b_s);
                     let c = f64x4::splat(c);
                     let d = f64x4::splat(d);
                     let one = f64x4::ONE;
@@ -788,5 +838,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    // Check that rectangle evaluations give expected results
+    #[test]
+    fn check_rectangle_values() {
+        let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+        let mx = 10;
+        let my = 30;
+
+        let r = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+
+        let ctxt = BatchBvnd::new(r);
+
+        let mut xs = vec![0.0; mx];
+        let mut ys = vec![0.0; my];
+        let mut out = vec![0.0; (mx + 1) * (my + 1)];
+
+        let eps = 1e-15;
+        for n in 0..1000 {
+            let x1 = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let x2 = to_three_decimals(2.0 * rng.random::<f64>());
+            let y1 = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let y2 = to_three_decimals(2.0 * rng.random::<f64>());
+
+            for idx in 0..mx {
+                let f = (idx as f64) / (mx as f64);
+                xs[idx] = x1 + f * x2;
+            }
+
+            for idx in 0..my {
+                let f = (idx as f64) / (my as f64);
+                ys[idx] = y1 + f * y2;
+            }
+
+            ctxt.grid_bvnd(&xs, &ys, &mut out);
+
+            for i in 0..mx {
+                for j in 0..my {
+                    assert_within!(+eps, out[(j+1)*(mx + 1) + (i + 1)], crate::tvpack::bvnd(xs[i],ys[j],r), "n = {n}, i = {i}, j = {j}, xs[i] = {}, ys[j] = {}", xs[i], ys[j]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_checked_phid_minus() {
+        assert_eq!(checked_phid_minus(0.0), 0.5);
+        assert_eq!(checked_phid_minus(f64::INFINITY), 0.0);
+        assert_eq!(checked_phid_minus(f64::NEG_INFINITY), 1.0);
+        // This value from https://en.wikipedia.org/wiki/Error_function#Table_of_values
+        assert_within!(+1e-9, checked_phid_minus(SQRT_2), 0.157299207 / 2.0);
+    }
+
+    #[test]
+    fn test_count_greater() {
+        let v = f64x4::new([1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(count_greater(v, 0.5), 4);
+        assert_eq!(count_greater(v, 1.5), 3);
+        assert_eq!(count_greater(v, 2.5), 2);
+        assert_eq!(count_greater(v, 3.5), 1);
+        assert_eq!(count_greater(v, 4.5), 0);
     }
 }
