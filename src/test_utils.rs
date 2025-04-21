@@ -34,13 +34,15 @@ pub fn get_owens_t_value_burkardt_test_points() -> impl Iterator<Item = BvndTest
 pub fn get_random_owens_t_test_points() -> impl Iterator<Item = BvndTestPoint> {
     let mut rng = Pcg64Mcg::seed_from_u64(9);
 
-    (0..1000).map(move |_| {
-        let x = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
-        let y = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
-        let r = to_three_decimals(rng.random::<f64>());
-        let expected = owens_t::biv_norm(x, y, r);
-        BvndTestPoint { x, y, r, expected }
-    })
+    (0..10000)
+        .map(move |_| {
+            let x = to_three_decimals(4.0 * rng.random::<f64>() - 2.0);
+            let y = to_three_decimals(4.0 * rng.random::<f64>() - 2.0);
+            let r = to_three_decimals(rng.random::<f64>());
+            let expected = owens_t::biv_norm(x, y, r);
+            BvndTestPoint { x, y, r, expected }
+        })
+        .filter(|tp| tp.x != 0.0 && tp.y != 0.0)
 }
 
 pub fn get_burkardt_nbs_test_points() -> impl Iterator<Item = BvndTestPoint> {

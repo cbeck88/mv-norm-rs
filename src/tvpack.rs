@@ -68,7 +68,11 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 
 /// Rust port of tvpack fortran function bvnd.
 /// Note that this is basically a transliteration, and doesn't use SIMD or make
-/// major changes to the original.
+/// semantic changes to the original.
+///
+/// Note: I believe that the original has a bug when r <= -0.925, and is only one or
+/// two decimals accurate in that case. But in other cases it is highly accurate.
+/// The mv_norm::bvnd function has corrected the bug.
 ///
 /// Orignal documentation:
 ///
@@ -101,21 +105,6 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
     let mut h = dh;
     let mut k = dk;
     let hk = h * k;
-
-    /* These infinity checks seem okay, but were not actually in the original.
-
-    if dh == f64::INFINITY || dk == f64::INFINITY {
-        return 0.0;
-    }
-    if dh == f64::NEG_INFINITY {
-        if dk == f64::NEG_INFINITY {
-            return 1.0;
-        } else {
-            return phid(dk);
-        }
-    } else if dk == f64::NEG_INFINITY {
-        return phid(hk);
-    }*/
 
     // Select quadrature
     let quad = select_quadrature(r.abs());
@@ -201,6 +190,7 @@ mod tests {
     use crate::test_utils::*;
     use assert_within::assert_within;
 
+    // Test against the burkardt test points
     #[test]
     fn spot_check_tvpack_bvnd_burkardt() {
         // FIXME: Double check these test vectors, because we had similar precision
@@ -223,8 +213,9 @@ mod tests {
         }
     }
 
+    // Test against the burkardt test vectors, but using owens t values.
     #[test]
-    fn spot_check_tvpack_bvnd_against_owens_t() {
+    fn spot_check_tvpack_bvnd_against_burkardt_owens_t_vals() {
         let eps = 1e-15;
         for (n, BvndTestPoint { x, y, r, expected }) in
             get_owens_t_value_burkardt_test_points().enumerate()
@@ -236,18 +227,20 @@ mod tests {
         }
     }
 
+    // This tests against owens' T, at random points, only with r >= 0 points
     #[test]
     fn spot_check_tvpack_bvnd_random_owens() {
         for (n, BvndTestPoint { x, y, r, expected }) in get_random_owens_t_test_points().enumerate()
         {
+            debug_assert!(r >= 0.0);
             if r == 1.0 || r == -1.0 {
                 // I think these are buggy cases for tvpack
                 continue;
             }
-            let eps = if x * y >= 0.0 { 1e-14 } else { 1e-6 };
+            let eps = 1e-15;
             let val = bvnd(x, y, r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
-            assert_within!(+eps, bvnd(y,x, r), val);
+            assert_within!(+eps, bvnd(y, x, r), val);
             assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
         }
     }

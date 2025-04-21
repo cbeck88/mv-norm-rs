@@ -3,7 +3,18 @@ use crate::util::*;
 use libm::{asin, sin};
 use wide::f64x4;
 
-/// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance `rho`.
+// Return phi(-x) = 1 - phi(x) = 0.5 erfc (x / sqrt(2))
+// to double precision, and check for x = infinity.
+#[inline(always)]
+fn checked_phid_minus(x: f64) -> f64 {
+    if x == f64::INFINITY {
+        0.0
+    } else {
+        0.5 * libm::erfc(x * FRAC_1_SQRT_2)
+    }
+}
+
+/// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of correlation coefficient `rho`.
 ///
 /// `rho` must be in the range [-1.0, 1.0].
 ///
@@ -31,6 +42,8 @@ pub struct BatchBvnd {
 impl BatchBvnd {
     /// Precompute for the evaluation of bivariate normal CDF at several points
     /// with this value of rho (correlation coefficient)
+    ///
+    /// `rho` must be in the range [-1.0, 1.0].
     #[inline]
     pub fn new(rho: f64) -> Self {
         Self {
@@ -38,10 +51,10 @@ impl BatchBvnd {
         }
     }
 
-    /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of covariance rho
+    /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of correlation coefficient `rho`
     ///
-    /// If x or y = +∞, the result will be 0.0.
-    /// If x or y = -∞, the result is unspecified.
+    /// If `x` or `y` = +∞, the result will be 0.0.
+    /// If `x` or `y` = -∞, the result is unspecified.
     #[inline]
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
         self.inner.bvnd(x, y)
@@ -50,11 +63,10 @@ impl BatchBvnd {
     /// Same as bvnd, but faster if you already know values of phid(-x), phid(-y).
     /// Note that no checking of the values you provide is performed.
     ///
-    /// Here phid(z) := 0.5 erfc(z/sqrt(2))
+    /// Here phid(-z) := 0.5 erfc(z/sqrt(2))
     ///
     /// If you know standard normal CDF of z or -z already then you probably have
-    /// a good value for phid.
-    #[inline]
+    /// a decent value for phid.
     pub fn bvnd_with_precomputed_phid(
         &self,
         x: f64,
@@ -109,16 +121,12 @@ impl BatchBvnd {
 
         let stride = xn + 1;
 
-        fn checked_phid(x: f64) -> f64 {
-            if x == f64::NEG_INFINITY { 0.0 } else { phid(x) }
-        }
-
         out[0] = 1.0;
         for i in 0..xn {
-            out[1 + i] = checked_phid(-xs[i]);
+            out[1 + i] = checked_phid_minus(xs[i]);
         }
         for j in 0..yn {
-            let phid_y = checked_phid(-ys[j]);
+            let phid_y = checked_phid_minus(ys[j]);
             out[stride * j] = phid_y;
 
             for i in 0..xn {
@@ -348,10 +356,11 @@ impl BatchBvndInner {
             return phid(dh);
         }
         */
-        self.bvnd_with_precomputed_phid(dh, dk, phid(-dh), phid(-dk))
+        self.bvnd_with_precomputed_phid(dh, dk, checked_phid_minus(dh), checked_phid_minus(dk))
     }
 
-    // Comptue bvnd, using precomputed values of phid(-dh), phid(-dk)
+    // Compute bvnd, using precomputed values of phid(-dh), phid(-dk)
+    #[inline(always)]
     fn bvnd_with_precomputed_phid(
         &self,
         dh: f64,
@@ -361,6 +370,12 @@ impl BatchBvndInner {
     ) -> f64 {
         if dh == f64::INFINITY || dk == f64::INFINITY {
             return 0.0;
+        }
+        if dh == f64::NEG_INFINITY {
+            return phid_minus_dk;
+        }
+        if dk == f64::NEG_INFINITY {
+            return phid_minus_dh;
         }
 
         match self {
@@ -397,11 +412,31 @@ impl BatchBvndInner {
                 a_inv,
                 quadrature,
             } => {
-                let hk = dh * dk;
+                // In testing, we find that the behavior on rho <= -0.925 for tvpack seems poor.
+                // All points outside of that match Owens' T to 15 decimals, and Owens' T bivariate normal
+                // obeys expected symmetry relations, also to 15 decimals.
+                //
+                // To try to remedy this, we want to use the following identity to avoid needing to evaluate
+                // on rho <= -0.925:
+                //
+                // Pr[ X > x, Y > y] + Pr [ X > x, Y <= y] = Pr [ X > x ]
+                // Pr[ X > x, Y > y] + Pr [ X > x, -Y >= -y] = Pr [ X > x ]
+                // bvnd(x,y,r) + bvnd(x,-y,-r) = phid(-x)
+                //
+                // So instead we will flip the sign of r implicitly, and flip one of x or y.
+                // Note that, the quadrature only depends on (1-r)(1+r), so flipping the sign doesn't
+                // change any of that stuff.
+                let (h, k) = if rho.is_sign_positive() {
+                    (dh, dk)
+                } else {
+                    // Arbitrarily, we will flip the sign of h. It turns out it doesn't really matter which one we flip.
+                    (-dh, dk)
+                };
+                let hk = h * k;
 
                 let mut bvn = 0.0;
 
-                let b = dh - dk;
+                let b = h - k;
                 let b_s = b * b;
                 let c = (4.0 - hk) / 8.0;
                 let d = (12.0 - hk) / 16.0;
@@ -488,37 +523,57 @@ impl BatchBvndInner {
                     }
                 }
                 bvn *= -FRAC_1_2_PI;
-                // These h,k declarations are a bit silly but we're trying to preserve
-                // it for now to make it easier to match it up to the fortran sources.
-                if *rho > 0.0 {
-                    let h = dh;
-                    let k = dk;
+
+                if rho.is_sign_positive() {
                     // bvn += phid(-f64::max(h, k));
                     if h > k {
                         bvn += phid_minus_dh;
                     } else {
                         bvn += phid_minus_dk;
                     }
+                    bvn
                 } else {
-                    bvn = -bvn;
-                    // FIXME: This seems to be the only part of the whole function that
-                    // isn't symmetric if h and k are swapped, which indicates
-                    // that it is likely wrong.
-                    // Also, in the limit that rho -> -1, a -> 0, and phid(-b/a) -> 0,
-                    // and x -> 0, which kills off every other term.
+                    // Note: We have the following identity:
+                    // bvnd(dh, dk, r) + bvnd(-dh, dk, -r) = phid(-dk)
                     //
-                    // But we're pretty sure that the right answer when rho = -1 is
-                    // f64::max(phid_minus_dh + phid_minus_dk - 1.0, 0.0)
-                    // So continuity requires that we do something here that has that
-                    // as a limit.
-
-                    /* old code:
-                    if k > h {
-                        bvn += phid_minus_dk - phid_minus_dh
-                    }*/
-                    bvn += f64::max(phid_minus_dh + phid_minus_dk - 1.0, 0.0);
+                    // bvn variable currently holds what we would return for
+                    // bvnd(h, k, -r), but missing the - phid(-max(h, k)) part.
+                    //
+                    // So bvn = bvnd(h,k,-r) - phid(-max(h,k))
+                    // or bvnd(h,k,-r) = bvn + phid(-max(h,k))
+                    // where h = -dh, k = dk
+                    //
+                    // We have
+                    //
+                    // bvnd(dh, dk, r) = phid(-dk) - bvnd(-dh, dk, -r)
+                    //                 = phid(-dk) - phid(-max(h,k)) - bvn
+                    //
+                    // If dk >= -dh, then this is:
+                    //
+                    // bvnd(dh, dk, r) = phid(-dk) - phid(-dk) - bvn = -bvn
+                    //
+                    // Otherwise it is: phid(-dk) - phid(dh) - bvn
+                    // = phid(-dk) + phid(-dh) - 1 - bvn
+                    //
+                    // So we now need to solve by:
+                    // bvnd(dh, dk, r) = phid(-dk) + phid(-max(-dh, dk)) - bvn
+                    //
+                    // Note that this vaguely resembles the fortran code:
+                    // BVN = -BVN
+                    // IF ( K .GT. H ) BVN = BVN + PHID(K) - PHID(H)
+                    //
+                    // but they were flipping both variables on negative rho,
+                    // and they added phid(K) - phid(h) rather than phid(k) + phid(h) - 1.
+                    //
+                    // Testing gives strong evidence that our version is correct,
+                    // since it now satisfies all identifies to 15 decimals, and agrees
+                    // with owen's t results everywhere to 15 decimals.
+                    if k >= h {
+                        -bvn
+                    } else {
+                        phid_minus_dk + phid_minus_dh - 1.0 - bvn
+                    }
                 }
-                bvn
             }
         }
     }
@@ -550,12 +605,8 @@ mod tests {
 
             // While we're here, check that the owen's t value is pretty close
             // to the batch value, on at least the easier points.
-            if (x.abs() < 1.75 && y.abs() < 1.75) && -0.928 < r {
-                let eps = if x * y > 0.0 || (x-y).abs() < 1.9 {
-                    1e-15
-                } else {
-                    2e-5
-                };
+            // Note: I believe Owen's T currently has bugs when x == 0 or y == 0.
+            if x != 0.0 && y != 0.0 {
                 assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
             }
             if r == 1.0 || r == -1.0 || r == 0.0 {
@@ -564,7 +615,7 @@ mod tests {
 
             // I think whatever tvpack sources we found had a bug in this case,
             // but these extremes aren't terribly important in practice.
-            if r <= -0.924 {
+            if r <= -0.925 {
                 // We decided to change the expression for the case rho <= -0.925,
                 // because the tvpack behavior wasn't symmetric wrt x and y, and looked incorrect,
                 // and disagreed with owen's T and other results. So we don't match tvpack there anymore,
@@ -578,8 +629,10 @@ mod tests {
         }
     }
 
+    // Check against the burkardt test points
     #[test]
     fn spot_check_batch_bvnd_against_burkardt_points() {
+        // Note: the burkardt points appear to themselves have fairly low accuracy
         let eps = 1e-6;
         for (n, BvndTestPoint { x, y, r, expected }) in get_burkardt_nbs_test_points().enumerate() {
             let ctxt = BatchBvnd::new(r);
@@ -590,6 +643,7 @@ mod tests {
         }
     }
 
+    // Check against the burkardt test points, but using the owens-t values
     #[test]
     fn spot_check_batch_bvnd_against_burkardt_owens_t() {
         let eps = 1e-15;
@@ -604,17 +658,65 @@ mod tests {
         }
     }
 
+    // Check against 10,000 random owen's T evaluations, where rho is positive
     #[test]
     fn spot_check_batch_bvnd_against_random_owens_t() {
         for (n, BvndTestPoint { x, y, r, expected }) in get_random_owens_t_test_points().enumerate()
         {
-            let eps = if x * y >= 0.0 { 1e-14 } else { 1e-6 };
+            let eps = 1e-15;
 
             let ctxt = BatchBvnd::new(r);
             let val = ctxt.bvnd(x, y);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
             assert_within!(+eps, ctxt.bvnd(y,x), val, "n = {n}, x = {x}, y = {y}, rho = {r}");
             assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    #[test]
+    fn check_symmetry_conditions() {
+        let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+        for n in 0..10000 {
+            let x = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+            let y = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+            let r = to_three_decimals(rng.random::<f64>());
+
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            // Phi_2(x,y,r) = Phi_2(y,x,r);
+            let eps = 1e-15;
+            assert_within!(+eps, val, ctxt.bvnd(y,x), "n = {n}, x = {x}, y = {y}, rho = {r}");
+
+            // Pr[ X > x, Y > y ] = Pr[X > x] - Pr[ X > x, Y < y ]
+            // { Y < y } iff { -Y > -y }, and correlation of X and -Y  is -rho.
+            // Note: this test fails when r >0.925, because the behavior at -0.925 is wonky
+            //if r <= 0.925 {
+            assert_within!(+eps, val, checked_phid_minus(x) - bvnd(x,-y,-r), "n = {n}, x = {x}, y = {y}, rho = {r}");
+            //}
+            assert_within!(+eps, val, checked_phid_minus(x) - checked_phid_minus(-y) + ctxt.bvnd(-x,-y), "n = {n}, x = {x}, y = {y}, rho = {r}");
+        }
+    }
+
+    #[test]
+    fn check_symmetry_conditions_wider_range() {
+        let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+        for n in 0..10000 {
+            let x = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let y = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let r = to_three_decimals(rng.random::<f64>());
+
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            // Phi_2(x,y,r) = Phi_2(y,x,r);
+            let eps = 1e-15;
+            assert_within!(+eps, val, ctxt.bvnd(y,x), "n = {n}, x = {x}, y = {y}, rho = {r}");
+
+            // Pr[ X > x, Y > y ] = Pr[X > x] - Pr[ X > x, Y < y ]
+            // { Y < y } iff { -Y > -y }, and correlation of X and -Y  is -rho.
+            assert_within!(+eps, val, checked_phid_minus(x) - bvnd(x,-y,-r), "n = {n}, x = {x}, y = {y}, rho = {r}");
+            assert_within!(+eps, val, checked_phid_minus(x) - checked_phid_minus(-y) + ctxt.bvnd(-x,-y), "n = {n}, x = {x}, y = {y}, rho = {r}");
         }
     }
 }
