@@ -198,11 +198,11 @@ struct Quad2 {
     // Note: tvpack mutates a before computing x, so we have to divide by two,
     // relative to the a that we record.
     x_s: f64x4,
-    // x_s inverse
-    x_s_inv: f64x4,
+    // -1/(2x_s)
+    minus_one_over_two_x_s: f64x4,
     // 1.0/r_s from tvpack algorithm
     r_s_inv: f64x4,
-    // rational expression of r_s used in tvpack: (1.0 - r_s) / (2.0 * (1.0 + r_s))
+    // rational expression of r_s used in tvpack: - (1.0 - r_s) / (1.0 + r_s)
     r_s_ratio: f64x4,
     // w * a/2 from tvpack algorithm
     w: f64x4,
@@ -254,23 +254,21 @@ impl BatchBvndInner {
             // There are either 2, 3, or 5 Quad1 objects produced, depending on the value of n.
             let asr = f64x4::splat(asr);
             let quadrature: [Quad1; 5] = core::array::from_fn(|quad_idx| {
-                if quad_idx >= n { return Quad1::default(); }
+                if quad_idx >= n {
+                    return Quad1::default();
+                }
                 // Expanded (with signs) weights and positions from tvpack quad, in simd register
-                let (w,x) = {
+                let (w, x) = {
                     let (w0, x0) = tv_pack_quad[2 * quad_idx];
                     let (w1, x1) = tv_pack_quad[2 * quad_idx + 1];
                     let w = f64x4::new([w0, w0, w1, w1]);
                     let x = f64x4::new([-x0, x0, -x1, x1]);
-                    (w,x)
+                    (w, x)
                 };
                 let sn = (asr * (x + f64x4::ONE)).sin();
                 let denom_inv = f64x4::ONE / (f64x4::ONE - (sn * sn));
                 let w = w * asr * f64x4::new([FRAC_1_2_PI; 4]);
-                Quad1 {
-                    sn,
-                    denom_inv,
-                    w,
-                }
+                Quad1 { sn, denom_inv, w }
             });
 
             Self::RhoMiddle { quadrature, n }
@@ -330,12 +328,12 @@ impl BatchBvndInner {
                     let w = w * a;
 
                     // x_s_inv is at least 7.0, and can get arbitrarily large as rho approaches 1.
-                    let x_s_inv = x_s.recip();
-                    let r_s_ratio = (1.0 - r_s) / (2.0 * (1.0 + r_s));
+                    let minus_one_over_two_x_s = -0.5 / x_s;
+                    let r_s_ratio = -(1.0 - r_s) / (1.0 + r_s);
                     let r_s_inv = r_s.recip();
 
                     quad.x_s.as_array_mut()[idx2] = x_s;
-                    quad.x_s_inv.as_array_mut()[idx2] = x_s_inv;
+                    quad.minus_one_over_two_x_s.as_array_mut()[idx2] = minus_one_over_two_x_s;
                     quad.r_s_inv.as_array_mut()[idx2] = r_s_inv;
                     quad.r_s_ratio.as_array_mut()[idx2] = r_s_ratio;
                     quad.w.as_array_mut()[idx2] = w;
@@ -466,18 +464,22 @@ impl BatchBvndInner {
                 //
                 // We have:
                 // -1/2 * (bs/xs + hk) > -100
-                // bs/xs + hk < 200
-                // bs/xs < 200 - hk
-                // 1/xs < (200 - hk) / bs
+                // (-1/2 * 1/xs) * bs - hk/2 > -100
+                // (-1/2 * 1/xs) * bs > -100 + hk/2
+                // (-1/2 * 1/xs) > (-100 + hk/2) / bs
                 //
                 // The last equivalence is valid because b_s is a square, so dividing it doesn't change signs.
                 // Even if it is zero, ieee requires that the result is +infinity or -infinity
                 // However, it's probably not faster to do it that way, since fp division can be like 20-30 cycles,
                 // while fp multiplication is typically 1-2 cycles.
                 {
+                    let minus_100_plus_half_hk = -100.0 + hk * 0.5;
                     let limit = quadrature
                         .iter()
-                        .position(|q2| b_s * q2.x_s_inv.as_array_ref()[0] >= (200.0 - hk))
+                        .position(|q2| {
+                            b_s * q2.minus_one_over_two_x_s.as_array_ref()[0]
+                                <= minus_100_plus_half_hk
+                        })
                         .unwrap_or(5);
                     // let limit = quadrature
                     //    .partition_point(|q2| b_s * q2.x_s_inv.as_array_ref()[0] < (200.0 - hk));
@@ -491,16 +493,15 @@ impl BatchBvndInner {
                     limit += limit >> 2; // If the result was 4, then make it 5, otherwise leave it alone
                     */
 
-                    let minus_hk = f64x4::splat(-hk);
+                    let half_hk = f64x4::splat(hk * 0.5);
                     let b_s = f64x4::splat(b_s);
                     let c = f64x4::splat(c);
                     let d = f64x4::splat(d);
                     let one = f64x4::ONE;
-                    let minus_half = f64x4::new([-0.5; 4]);
 
                     for Quad2 {
                         x_s,
-                        x_s_inv,
+                        minus_one_over_two_x_s,
                         r_s_inv,
                         r_s_ratio,
                         w,
@@ -508,12 +509,13 @@ impl BatchBvndInner {
                     {
                         // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
                         // so we use one of the simd helper libraries that supports exp.
-                        let asr = minus_half * x_s_inv.mul_sub(b_s, minus_hk);
+                        let asr = minus_one_over_two_x_s.mul_sub(b_s, half_hk);
                         bvn += (*w
                             * asr.exp()
-                            * (minus_hk * r_s_ratio).exp().mul_sub(*r_s_inv
-                                , x_s.mul_add(d, one).mul_add(c * x_s, one)))
-                            .reduce_add();
+                            * (half_hk * r_s_ratio)
+                                .exp()
+                                .mul_sub(*r_s_inv, x_s.mul_add(d, one).mul_add(c * x_s, one)))
+                        .reduce_add();
                     }
                 }
                 bvn *= -FRAC_1_2_PI;
