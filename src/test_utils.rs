@@ -45,6 +45,21 @@ pub fn get_random_owens_t_test_points() -> impl Iterator<Item = BvndTestPoint> {
         .filter(|tp| tp.x != 0.0 && tp.y != 0.0)
 }
 
+// Ensure test coverage on the part of the algorithm where rho < -0.925
+pub fn get_random_owens_t_test_points_negative_rho() -> impl Iterator<Item = BvndTestPoint> {
+    let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+    (0..10000)
+        .map(move |_| {
+            let x = to_three_decimals(4.0 * rng.random::<f64>() - 2.0);
+            let y = to_three_decimals(4.0 * rng.random::<f64>() - 2.0);
+            let r = -to_three_decimals(rng.random::<f64>());
+            let expected = owens_t::biv_norm(x, y, r);
+            BvndTestPoint { x, y, r, expected }
+        })
+        .filter(|tp| tp.x != 0.0 && tp.y != 0.0)
+}
+
 /// Get test point on the axis x = 0
 pub fn get_axis_test_points() -> impl Iterator<Item = BvndTestPoint> {
     [

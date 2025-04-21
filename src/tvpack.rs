@@ -72,11 +72,6 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 /// Note that this is basically a transliteration, and doesn't use SIMD or make
 /// semantic changes to the original.
 ///
-/// Note: I believe that the original has a bug when r <= -0.925, and is only one or
-/// two decimals accurate in that case. But in other cases it is highly accurate.
-/// The `mv_norm::bvnd` function has corrected the bug, so it's preferable to use that,
-/// and for all other inputs it has very high fidelity to the tvpack original.
-///
 /// Orignal documentation:
 ///
 /// ```ignore
@@ -105,8 +100,8 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 /// ```
 /// https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514
 pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
-    let mut h = dh;
-    let mut k = dk;
+    let h = dh;
+    let k = dk;
     let hk = h * k;
 
     // Select quadrature
@@ -131,10 +126,7 @@ pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
         bvn
     } else {
         // r.abs() > 0.925
-        if r < 0.0 {
-            h = -h;
-            k = -k;
-        }
+        let (k, hk) = if r < 0.0 { (-k, -hk) } else { (k, hk) };
         if r.abs() < 1.0 {
             let a_s = (1.0 - r) * (1.0 + r);
             let mut a = sqrt(a_s);
@@ -235,11 +227,20 @@ mod tests {
     fn spot_check_tvpack_bvnd_random_owens() {
         for (n, BvndTestPoint { x, y, r, expected }) in get_random_owens_t_test_points().enumerate()
         {
-            debug_assert!(r >= 0.0);
-            if r == 1.0 || r == -1.0 {
-                // I think these are buggy cases for tvpack
-                continue;
-            }
+            let eps = 1e-15;
+            let val = bvnd(x, y, r);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, bvnd(y, x, r), val);
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    // This tests against owens' T, at random points, only with r < 0 points
+    #[test]
+    fn spot_check_tvpack_bvnd_random_owens_negative_rho() {
+        for (n, BvndTestPoint { x, y, r, expected }) in
+            get_random_owens_t_test_points_negative_rho().enumerate()
+        {
             let eps = 1e-15;
             let val = bvnd(x, y, r);
             //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");

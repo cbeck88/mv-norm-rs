@@ -60,10 +60,10 @@ impl BatchBvnd {
         self.inner.bvnd(x, y)
     }
 
-    /// Same as bvnd, but faster if you already know values of phid(-x), phid(-y).
+    /// Same as bvnd, but faster if you already know values of phi(-x), phi(-y).
     /// Note that no checking of the values you provide is performed.
     ///
-    /// Here phid(-z) := 0.5 erfc(z/sqrt(2))
+    /// Here phi(-z) := 0.5 erfc(z/sqrt(2))
     ///
     /// If you know the standard normal CDF value of z or -z already then you probably have
     /// a decent value for phid.
@@ -71,11 +71,11 @@ impl BatchBvnd {
         &self,
         x: f64,
         y: f64,
-        phid_minus_x: f64,
-        phid_minus_y: f64,
+        phi_minus_x: f64,
+        phi_minus_y: f64,
     ) -> f64 {
         self.inner
-            .bvnd_with_precomputed_phid(x, y, phid_minus_x, phid_minus_y)
+            .bvnd_with_precomputed_phid(x, y, phi_minus_x, phi_minus_y)
     }
 
     /// Batch evaluate bvnd at all points of a grid.
@@ -132,11 +132,11 @@ impl BatchBvnd {
         }
         for j in 0..yn {
             let phid_y = checked_phid_minus(ys[j]);
-            out[stride * j] = phid_y;
+            out[stride * (j + 1)] = phid_y;
 
             for i in 0..xn {
                 let phid_x = out[1 + i];
-                out[stride * j + i + 1] =
+                out[stride * (j + 1) + (i + 1)] =
                     self.bvnd_with_precomputed_phid(xs[i], ys[j], phid_x, phid_y);
             }
         }
@@ -407,12 +407,7 @@ impl BatchBvndInner {
                 a_inv,
                 quadrature,
             } => {
-                // In testing, we find that the behavior on rho <= -0.925 for tvpack seems poor.
-                // All points outside of that match Owens' T to 15 decimals, and Owens' T bivariate normal
-                // obeys expected symmetry relations, also to 15 decimals.
-                //
-                // To try to remedy this, we want to use the following identity to avoid needing to evaluate
-                // on rho <= -0.925:
+                // We use the following identity to reduce rho <= -0.925 inputs to rho <= 0.925:
                 //
                 // Pr[ X > x, Y > y] + Pr [ X > x, Y <= y] = Pr [ X > x ]
                 // Pr[ X > x, Y > y] + Pr [ X > x, -Y >= -y] = Pr [ X > x ]
@@ -553,16 +548,17 @@ impl BatchBvndInner {
                     // So we now need to solve by:
                     // bvnd(dh, dk, r) = phid(-dk) + phid(-max(-dh, dk)) - bvn
                     //
-                    // Note that this vaguely resembles the fortran code:
+                    // This is basically the same as the fortran code, if you take
+                    // into account the mutability of the variables.
+                    //
                     // BVN = -BVN
                     // IF ( K .GT. H ) BVN = BVN + PHID(K) - PHID(H)
                     //
-                    // but they were flipping both variables on negative rho,
-                    // and they added phid(K) - phid(h) rather than phid(k) + phid(h) - 1.
-                    //
-                    // Testing gives strong evidence that our version is correct,
+                    // Testing gives strong evidence that both versions are correct,
                     // since it now satisfies all identifies to 15 decimals, and agrees
                     // with owen's t results everywhere to 15 decimals.
+                    // But in this version, we can use precomputed values of phid,
+                    // so its faster.
                     if k >= h {
                         -bvn
                     } else {
@@ -602,16 +598,7 @@ mod tests {
             // to the batch value.
             assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
 
-            // I think whatever tvpack sources we found had a bug in this case,
-            // but these extremes aren't terribly important in practice.
-            if r <= -0.925 {
-                // We decided to change the expression for the case rho <= -0.925,
-                // because the tvpack behavior wasn't symmetric wrt x and y, and looked incorrect,
-                // and disagreed with owen's T and other results. So we don't match tvpack there anymore,
-                // or at least whatever version of tvpack was used in the mvtnorm package.
-                continue;
-            }
-
+            // Compare with tvpack value
             let tvpack_val = crate::tvpack::bvnd(x, y, r);
 
             assert_within!(+eps, batch_val, tvpack_val, "n = {n}, x = {x}, y = {y}, rho = {r}\nowens_t::biv_norm(x,y,rho) = {owens_t_val}")
@@ -662,6 +649,23 @@ mod tests {
         }
     }
 
+    // Check against 10,000 random owen's T evaluations, where rho is negative
+    #[test]
+    fn spot_check_batch_bvnd_against_random_owens_t_negative_rho() {
+        for (n, BvndTestPoint { x, y, r, expected }) in
+            get_random_owens_t_test_points_negative_rho().enumerate()
+        {
+            let eps = 1e-15;
+
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, ctxt.bvnd(y,x), val, "n = {n}, x = {x}, y = {y}, rho = {r}");
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    // Check against known points where x is 0
     #[test]
     fn spot_check_batch_bvnd_against_axis_points() {
         for (n, BvndTestPoint { x, y, r, expected }) in get_axis_test_points().enumerate() {
@@ -723,6 +727,8 @@ mod tests {
 
             let ctxt = BatchBvnd::new(r);
             let val = ctxt.bvnd(x, y);
+            assert!(val >= 0.0, "val = {val}");
+            assert!(val <= 1.0, "val = {val}");
             // Phi_2(x,y,r) = Phi_2(y,x,r);
             let eps = 1e-15;
             assert_within!(+eps, val, ctxt.bvnd(y,x), "n = {n}, x = {x}, y = {y}, rho = {r}");
@@ -731,6 +737,44 @@ mod tests {
             // { Y < y } iff { -Y > -y }, and correlation of X and -Y  is -rho.
             assert_within!(+eps, val, checked_phid_minus(x) - bvnd(x,-y,-r), "n = {n}, x = {x}, y = {y}, rho = {r}");
             assert_within!(+eps, val, checked_phid_minus(x) - checked_phid_minus(-y) + ctxt.bvnd(-x,-y), "n = {n}, x = {x}, y = {y}, rho = {r}");
+        }
+    }
+
+    // Check that grid evaluations give expected results
+    #[test]
+    fn check_grid_values() {
+        let mut rng = Pcg64Mcg::seed_from_u64(9);
+
+        let m = 20;
+
+        let r = to_three_decimals(2.0 * rng.random::<f64>() - 1.0);
+
+        let ctxt = BatchBvnd::new(r);
+
+        let mut xs = vec![0.0; m];
+        let mut ys = vec![0.0; m];
+        let mut out = vec![0.0; (m + 1) * (m + 1)];
+
+        let eps = 1e-15;
+        for n in 0..1000 {
+            let x1 = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let x2 = to_three_decimals(2.0 * rng.random::<f64>());
+            let y1 = to_three_decimals(8.0 * rng.random::<f64>() - 4.0);
+            let y2 = to_three_decimals(2.0 * rng.random::<f64>());
+
+            for idx in 0..m {
+                let f = (idx as f64) / (m as f64);
+                xs[idx] = x1 + f * x2;
+                ys[idx] = y1 + f * y2;
+            }
+
+            ctxt.grid_bvnd(&xs, &ys, &mut out);
+
+            for i in 0..m {
+                for j in 0..m {
+                    assert_within!(+eps, out[(j+1)*(m + 1) + (i + 1)], crate::tvpack::bvnd(xs[i],ys[j],r), "i = {i}, j = {j}, xs[i] = {}, ys[j] = {}", xs[i], ys[j]);
+                }
+            }
         }
     }
 }
