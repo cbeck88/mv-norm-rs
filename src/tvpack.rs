@@ -67,12 +67,14 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 }
 
 /// Rust port of tvpack fortran function bvnd.
+///
 /// Note that this is basically a transliteration, and doesn't use SIMD or make
 /// semantic changes to the original.
 ///
 /// Note: I believe that the original has a bug when r <= -0.925, and is only one or
 /// two decimals accurate in that case. But in other cases it is highly accurate.
-/// The mv_norm::bvnd function has corrected the bug.
+/// The mv_norm::bvnd function has corrected the bug, so it's preferable to use that,
+/// and for all other inputs it has very high fidelity to the tvpack original.
 ///
 /// Orignal documentation:
 ///

@@ -65,7 +65,7 @@ impl BatchBvnd {
     ///
     /// Here phid(-z) := 0.5 erfc(z/sqrt(2))
     ///
-    /// If you know standard normal CDF of z or -z already then you probably have
+    /// If you know the standard normal CDF value of z or -z already then you probably have
     /// a decent value for phid.
     pub fn bvnd_with_precomputed_phid(
         &self,
@@ -79,7 +79,7 @@ impl BatchBvnd {
     }
 
     /// Batch evaluate bvnd at all points of a grid.
-    /// This computes and reuses values of phid, which improves performance noticeably for large grids,
+    /// This computes and reuses values of phi, which improves performance noticeably for large grids,
     /// and is relatively easy to use from the caller's perspective.
     ///
     /// This routine does not allocate, but uses an output parameter to store results.
@@ -93,21 +93,26 @@ impl BatchBvnd {
     ///   `out` has length `(xs.len() + 1) * (ys.len() + 1)`, and will be interpreted as a `(Y+1) * (X+1)` matrix.
     ///   In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
     ///
-    ///   If you pass +∞ as an element of `xs` or `ys`, that row or column will be entirely 0.0.
+    ///   You may pass +∞ as an element of `xs` or `ys`, and that row or column will be entirely 0.0.
     ///   If you pass -∞, the behavior in that row or column is unspecified.
     ///
     /// Post-conditions:
     ///   The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
-    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thoguht of with those imaginary entries.
+    ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thought of *with those imaginary entries*.
     ///
-    ///   Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for bivariate normal of correlation coefficient `rho`.
+    ///   Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
     ///
-    ///   When `x` or `y` is -∞, the bivariate normal cdf degenerates to univariate normal cdf,
-    ///   so you will get `phid` of the other argument.
+    ///   In other words, to find the answer to the query corresponding to `(x_idx, y_idx)` in the input slices,
+    ///   you have to add 1 to `x_idx` and to `y_idx` when you go to the output. The entries in row 0 or column 0 of
+    ///   the output are special, and correspond to `x` or `y` being -∞.
+    ///
+    ///   When `x` or `y` is -∞, the bivariate normal cdf degenerates to the univariate normal cdf.
+    ///   So  out[0][x_idx] = Pr[ X > xs[x_idx] ] = phi(-xs[x_idx])
+    ///   and out[y_idx][0] = Pr[ Y > ys[y_idx] ] = phi(-ys[y_idx])
+    ///
+    ///   `out[0][0]` will always be `1.0`.
     ///
     ///   When `x` or `y` is ∞, the result will be `0.0`.
-    ///
-    ///   `out[0][0]` will be `1.0` always.
     pub fn grid_bvnd(&self, xs: &[f64], ys: &[f64], out: &mut [f64]) {
         let xn = xs.len();
         let yn = ys.len();
