@@ -205,15 +205,10 @@ struct Quad2 {
     // rational expression of r_s used in tvpack: - (1.0 - r_s) / (1.0 + r_s)
     r_s_ratio: f64x4,
     // w * a/2 from tvpack algorithm
-    w: f64x4,
+    aw: f64x4,
 }
 
 impl BatchBvndInner {
-    // Note: for actual batch evaluation, this doesn't really need to be fast.
-    // For the bvnd helper function, you would want this to be fast since it won't
-    // really be amortized, but for now I'm not bothering.
-    // Benchmarks show that BvndBatch::new(rho).bvnd(x,y) is still faster than
-    // tvpack::bvnd(x,y,rho) anyways.
     #[inline]
     fn new(rho: f64) -> Self {
         assert!(rho.abs() <= 1.0, "rho must be between -1.0 and 1.0: {rho}");
@@ -313,33 +308,41 @@ impl BatchBvndInner {
             }
 
             let quadrature: [Quad2; 5] = core::array::from_fn(|idx| {
-                let mut quad = Quad2::default();
-                for idx2 in 0..4 {
-                    let (w, x) = expanded_sorted_quad(idx * 4 + idx2);
-                    // Note: a_s = 1 - rho^2, and 0.925 <= |rho| < 1.
-                    // So 0 <= a_s <= 0.144375
-                    // and 0 <= a <= 0.37996
-                    let a = a * 0.5; // See tvpack before quadrature starts
-                    // Quadrature points are (-0.993, 0.993) so after this line, x in [0, ~0.37)
-                    let x = a * (x + 1.0);
-                    // 0 <= x_s <= ~0.142
-                    let x_s = x * x;
-                    let r_s = sqrt(1.0 - x_s);
-                    let w = w * a;
+                let (w, x) = {
+                    let (w0, x0) = expanded_sorted_quad(idx * 4);
+                    let (w1, x1) = expanded_sorted_quad(idx * 4 + 1);
+                    let (w2, x2) = expanded_sorted_quad(idx * 4 + 2);
+                    let (w3, x3) = expanded_sorted_quad(idx * 4 + 3);
 
-                    // x_s_inv is at least 7.0, and can get arbitrarily large as rho approaches 1.
-                    let minus_one_over_two_x_s = -0.5 / x_s;
-                    let r_s_ratio = -(1.0 - r_s) / (1.0 + r_s);
-                    let r_s_inv = r_s.recip();
+                    (f64x4::new([w0, w1, w2, w3]), f64x4::new([x0, x1, x2, x3]))
+                };
 
-                    quad.x_s.as_array_mut()[idx2] = x_s;
-                    quad.minus_one_over_two_x_s.as_array_mut()[idx2] = minus_one_over_two_x_s;
-                    quad.r_s_inv.as_array_mut()[idx2] = r_s_inv;
-                    quad.r_s_ratio.as_array_mut()[idx2] = r_s_ratio;
-                    quad.w.as_array_mut()[idx2] = w;
+                // Note: a_s = 1 - rho^2, and 0.925 <= |rho| < 1.
+                // So 0 <= a_s <= 0.144375
+                // and 0 <= a <= 0.37996
+                // let a = a * 0.5 // See tvpack before quadrature starts
+                let a = f64x4::splat(a * 0.5);
+
+                // Quadrature points are (-0.993, 0.993) so after this line, x in [0, ~0.37)
+                // let x = a * (x + 1.0);
+                let x = x.mul_add(a, a);
+                // 0 <= x_s <= ~0.142
+                let x_s = x * x;
+                let r_s = (f64x4::ONE - x_s).sqrt();
+                let aw = w * a;
+
+                // x_s_inv is at least 7.0, and can get arbitrarily large as rho approaches 1.
+                let minus_one_over_two_x_s = f64x4::new([-0.5; 4]) / x_s;
+                let r_s_ratio = (r_s - f64x4::ONE) / (r_s + f64x4::ONE);
+                let r_s_inv = f64x4::ONE / r_s;
+
+                Quad2 {
+                    x_s,
+                    minus_one_over_two_x_s,
+                    r_s_ratio,
+                    r_s_inv,
+                    aw,
                 }
-
-                quad
             });
 
             Self::RhoOther {
@@ -471,7 +474,8 @@ impl BatchBvndInner {
                 // The last equivalence is valid because b_s is a square, so dividing it doesn't change signs.
                 // Even if it is zero, ieee requires that the result is +infinity or -infinity
                 // However, it's probably not faster to do it that way, since fp division can be like 20-30 cycles,
-                // while fp multiplication is typically 1-2 cycles.
+                // while fp multiplication is typically 1-2 cycles. If the quadrature array were like hundreds of elements,
+                // then it's probably better to do that, and then do binary search.
                 {
                     let minus_100_plus_half_hk = -100.0 + hk * 0.5;
                     let limit = quadrature
@@ -504,13 +508,13 @@ impl BatchBvndInner {
                         minus_one_over_two_x_s,
                         r_s_inv,
                         r_s_ratio,
-                        w,
+                        aw,
                     } in quadrature.iter().take(limit)
                     {
                         // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
                         // so we use one of the simd helper libraries that supports exp.
                         let asr = minus_one_over_two_x_s.mul_sub(b_s, half_hk);
-                        bvn += (*w
+                        bvn += (*aw
                             * asr.exp()
                             * (half_hk * r_s_ratio)
                                 .exp()
