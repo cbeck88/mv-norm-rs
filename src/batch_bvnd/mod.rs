@@ -276,7 +276,7 @@ impl BatchBvndInner {
             let a_inv = a.recip();
 
             let tv_pack_quad = select_quadrature_padded(rho.abs());
-            debug_assert!(tv_pack_quad.len() == 10);
+            assert!(tv_pack_quad.len() == 10);
 
             // Expand tv_pack_quad to a full list of 20 points, in sorted order of x.
             //
@@ -290,26 +290,30 @@ impl BatchBvndInner {
             // The x's are negative and start close to -.99, and a is positive and close to 1.
             // So starting with is = -1.0 and iterating in order will start with the largest x.
             // Once those are exhausted, we do is = 1.0, and iterate in reverse order.
-            let temp: [(f64, f64); 20] = core::array::from_fn(|idx| {
+            let expanded_sorted_quad = |idx: usize| -> (f64, f64) {
+                assert!(idx < 20);
                 if idx < 10 {
                     let (w, x) = tv_pack_quad[idx];
                     (w, -x)
                 } else {
                     tv_pack_quad[19 - idx]
                 }
-            });
+            };
 
-            temp.windows(2).for_each(|w| {
+            // Check that `expanded_sorted_quad` actually has decreasing values of x
+            for i in 0..19 {
+                let a = expanded_sorted_quad(i);
+                let b = expanded_sorted_quad(i + 1);
                 debug_assert!(
-                    w[0].1 >= w[1].1,
-                    "should be sorted so that x is decreasing: {w:?}"
-                )
-            });
+                    a.1 >= b.1,
+                    "should be sorted so that x is decreasing: {a:?}, {b:?}"
+                );
+            }
 
             let quadrature: [Quad2; 5] = core::array::from_fn(|idx| {
                 let mut quad = Quad2::default();
                 for idx2 in 0..4 {
-                    let (w, x) = temp[idx * 4 + idx2];
+                    let (w, x) = expanded_sorted_quad(idx * 4 + idx2);
                     // Note: a_s = 1 - rho^2, and 0.925 <= |rho| < 1.
                     // So 0 <= a_s <= 0.144375
                     // and 0 <= a <= 0.37996
@@ -347,20 +351,6 @@ impl BatchBvndInner {
     }
 
     fn bvnd(&self, dh: f64, dk: f64) -> f64 {
-        /* Note: I don't think we need to do this, and it won't really be possible in the batched api
-        if dh == f64::INFINITY || dk == f64::INFINITY {
-            return 0.0;
-        }
-        if dh == f64::NEG_INFINITY {
-            if dk == f64::NEG_INFINITY {
-                return 1.0;
-            } else {
-                return phid(dk);
-            }
-        } else if dk == f64::NEG_INFINITY {
-            return phid(dh);
-        }
-        */
         self.bvnd_with_precomputed_phid(dh, dk, checked_phid_minus(dh), checked_phid_minus(dk))
     }
 

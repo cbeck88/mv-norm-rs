@@ -56,6 +56,7 @@ fn select_quadrature(rho_abs: f64) -> &'static [(f64, f64)] {
 
 // quadrature selection, but we padded the result to be a multiple of two
 // which simplified the SIMD version of things.
+#[inline]
 pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
     if rho_abs < 0.3 {
         &QUAD_6[..]
@@ -73,7 +74,7 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 ///
 /// Note: I believe that the original has a bug when r <= -0.925, and is only one or
 /// two decimals accurate in that case. But in other cases it is highly accurate.
-/// The mv_norm::bvnd function has corrected the bug, so it's preferable to use that,
+/// The `mv_norm::bvnd` function has corrected the bug, so it's preferable to use that,
 /// and for all other inputs it has very high fidelity to the tvpack original.
 ///
 /// Orignal documentation:
