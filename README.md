@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE-APACHE)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE-MIT)
 
-[API Docs](https://docs.rs/conf/latest/mv-norm/)
+[API Docs](https://docs.rs/mv-norm/latest/mv-norm/)
 
 *Fast* and *accurate* calcluations related to [multivariate normal distributions](https://en.wikipedia.org/wiki/Multivariate_normal_distribution), in pure rust. (Note: Right now we only have the bivariate normal CDF.)
 
