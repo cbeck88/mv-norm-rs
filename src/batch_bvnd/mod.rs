@@ -608,15 +608,9 @@ mod tests {
             let ctxt = BatchBvnd::new(r);
             let batch_val = ctxt.bvnd(x, y);
 
-            // While we're here, check that the owen's t value is pretty close
-            // to the batch value, on at least the easier points.
-            // Note: I believe Owen's T currently has bugs when x == 0 or y == 0.
-            if x != 0.0 && y != 0.0 {
-                assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
-            }
-            if r == 1.0 || r == -1.0 || r == 0.0 {
-                assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
-            }
+            // While we're here, check that the owen's t value very pretty close
+            // to the batch value.
+            assert_within!(+eps, batch_val, owens_t_val, "n = {n}, x = {x}, y = {y}, rho = {r}");
 
             // I think whatever tvpack sources we found had a bug in this case,
             // but these extremes aren't terribly important in practice.
@@ -679,6 +673,25 @@ mod tests {
     }
 
     #[test]
+    fn spot_check_batch_bvnd_against_axis_points() {
+        for (n, BvndTestPoint { x, y, r, expected }) in get_axis_test_points().enumerate() {
+            let eps = 1e-15;
+
+            let ctxt = BatchBvnd::new(r);
+            let val = ctxt.bvnd(x, y);
+            //eprintln!("n = {n}: biv_norm({x}, {y}, {r}) = {val}: expected: {fxy}");
+            assert_within!(+eps, ctxt.bvnd(y,x), val, "n = {n}, x = {x}, y = {y}, rho = {r}");
+            assert_within!(+eps, val, expected, "n = {n}, x = {x}, y = {y}, rho = {r}")
+        }
+    }
+
+    // Check identities like:
+    //
+    // bvnd(x,y,r) = bvnd(y,x,r)
+    // bvnd(x,y,r) + bvnd(x,-y,-r) = phi(-x)
+    //
+    // on random points
+    #[test]
     fn check_symmetry_conditions() {
         let mut rng = Pcg64Mcg::seed_from_u64(9);
 
@@ -703,6 +716,12 @@ mod tests {
         }
     }
 
+    // Check identities like:
+    //
+    // bvnd(x,y,r) = bvnd(y,x,r)
+    // bvnd(x,y,r) + bvnd(x,-y,-r) = phi(-x)
+    //
+    // on a wider range of random points
     #[test]
     fn check_symmetry_conditions_wider_range() {
         let mut rng = Pcg64Mcg::seed_from_u64(9);
