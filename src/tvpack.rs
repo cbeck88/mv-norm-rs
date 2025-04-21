@@ -1,7 +1,7 @@
 //! These functions are ported from Alan Genz' fortran code:
 //!
-//! See cran repository reae-only mirror:
-//! https://github.com/cran/mvtnorm/blob/master/src/tvpack.f
+//! See cran repository read-only mirror:
+//! <https://github.com/cran/mvtnorm/blob/master/src/tvpack.f>
 #![allow(clippy::excessive_precision)]
 
 use crate::util::*;
@@ -98,7 +98,7 @@ pub(crate) fn select_quadrature_padded(rho_abs: f64) -> &'static [(f64, f64)] {
 ///   DK  DOUBLE PRECISION, integration limit
 ///   R   DOUBLE PRECISION, correlation coefficient
 /// ```
-/// https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514
+/// <https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514>
 pub fn bvnd(dh: f64, dk: f64, r: f64) -> f64 {
     let h = dh;
     let k = dk;

@@ -14,7 +14,7 @@ fn checked_phid_minus(x: f64) -> f64 {
     }
 }
 
-/// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of correlation coefficient `rho`.
+/// Evaluate `Pr[ X > x, Y > y ]` for X, Y standard normals of correlation coefficient `rho`.
 ///
 /// `rho` must be in the range [-1.0, 1.0].
 ///
@@ -52,9 +52,9 @@ impl BatchBvnd {
         }
     }
 
-    /// Evaluate Pr[ X > x, Y > y ] for X, Y standard normals of correlation coefficient `rho`
+    /// Evaluate `Pr[ X > x, Y > y ]` for X, Y standard normals of correlation coefficient `rho`.
     ///
-    /// If `x` or `y` = +∞, the result will be 0.0.
+    /// If `x` or `y` = +∞, the result will be `0.0`.
     /// If `x` or `y` = -∞, the result is unspecified.
     #[inline]
     pub fn bvnd(&self, x: f64, y: f64) -> f64 {
@@ -64,10 +64,10 @@ impl BatchBvnd {
     /// Same as bvnd, but faster if you already know values of phi(-x), phi(-y).
     /// Note that no checking of the values you provide is performed.
     ///
-    /// Here phi(-z) := 0.5 erfc(z/sqrt(2))
+    /// Here `phi(-z) := 0.5 erfc(z/sqrt(2))`
     ///
     /// If you know the standard normal CDF value of z or -z already then you probably have
-    /// a decent value for phid.
+    /// a decent value for phi.
     pub fn bvnd_with_precomputed_phid(
         &self,
         x: f64,
@@ -85,35 +85,37 @@ impl BatchBvnd {
     ///
     /// This routine does not allocate, but uses an output parameter to store results.
     ///
-    /// Input:
-    ///   `xs`: A slice of f64 values
-    ///   `ys`: A slice of f64 values
-    ///   `out`: A mutable slice of f64 values.
+    /// *Input*:
     ///
-    /// Pre-conditions:
-    ///   `out` has length `(xs.len() + 1) * (ys.len() + 1)`, and will be interpreted as a `(Y+1) * (X+1)` matrix.
-    ///   In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
+    /// * `xs`: A slice of f64 values
+    /// * `ys`: A slice of f64 values
+    /// * `out`: A mutable slice of f64 values.
     ///
-    ///   You may pass +∞ as an element of `xs` or `ys`, and that row or column will be entirely 0.0.
-    ///   If you pass -∞, the behavior in that row or column is unspecified.
+    /// *Pre-conditions*:
     ///
-    /// Post-conditions:
-    ///   The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
+    /// * `out` has length `(xs.len() + 1) * (ys.len() + 1)`, and will be interpreted as a `(Y+1) * (X+1)` matrix.
+    /// * In the following, we use the notation `out[y_idx][x_idx] := out[y_idx * (xs.len() + 1) + x_idx ]`.
+    ///
+    /// * You may pass +∞ as an element of `xs` or `ys`, and that row or column will be entirely 0.0.
+    /// * If you pass -∞, the behavior in that row or column is unspecified.
+    ///
+    /// *Post-conditions*:
+    ///
+    /// * The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
     ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thought of *with those imaginary entries*.
     ///
-    ///   Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
+    /// * Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
     ///
-    ///   In other words, to find the answer to the query corresponding to `(x_idx, y_idx)` in the input slices,
+    /// * In other words, to find the answer to the query corresponding to `(x_idx, y_idx)` in the input slices,
     ///   you have to add 1 to `x_idx` and to `y_idx` when you go to the output. The entries in row 0 or column 0 of
     ///   the output are special, and correspond to `x` or `y` being -∞.
     ///
-    ///   When `x` or `y` is -∞, the bivariate normal cdf degenerates to the univariate normal cdf.
-    ///   So  out[0][x_idx] = Pr[ X > xs[x_idx] ] = phi(-xs[x_idx])
-    ///   and out[y_idx][0] = Pr[ Y > ys[y_idx] ] = phi(-ys[y_idx])
+    /// * When `x` or `y` is -∞, the bivariate normal cdf degenerates to the univariate normal cdf. So,
+    ///   * `out[0][x_idx] = Pr[ X > xs[x_idx] ] = phi(-xs[x_idx])`
+    ///   * `out[y_idx][0] = Pr[ Y > ys[y_idx] ] = phi(-ys[y_idx])`
+    ///   * `out[0][0]` will always be `1.0`.
     ///
-    ///   `out[0][0]` will always be `1.0`.
-    ///
-    ///   When `x` or `y` is ∞, the result will be `0.0`.
+    /// * When `x` or `y` is ∞, the result will be `0.0`.
     pub fn grid_bvnd(&self, xs: &[f64], ys: &[f64], out: &mut [f64]) {
         let xn = xs.len();
         let yn = ys.len();
