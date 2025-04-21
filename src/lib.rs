@@ -2,9 +2,9 @@
 //!
 //! Bivariate normal distribution CDF:
 //!
-//! * `tvpack` is a straight port of Genz (2004) fortran code, and uses no SIMD.
-//! * `BatchBvnd` extends that to do batch evaluation significantly faster, and uses SIMD operations
-//! * `bvnd` is a quick-start helper that you can use to evaluate the CDF at a single point, and uses SIMD operations.
+//! * [`tvpack`] is a straight port of Alan Genz' "tvpack" fortran code, and uses no SIMD.
+//! * [`BatchBvnd`] extends that to do batch evaluation significantly faster, and uses SIMD operations
+//! * [`bvnd`] is a quick-start helper that you can use to evaluate the CDF at a single point, and uses SIMD operations.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

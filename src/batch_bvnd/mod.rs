@@ -21,14 +21,14 @@ fn checked_phid_minus(x: f64) -> f64 {
 /// If `x` or `y` equals +∞, the result will be `0.0`.
 /// If `x` or `y` equals -∞, the result is unspecified.
 ///
-/// *Note*: This function uses just under 1kb of stack memory.
+/// *Note*: This function uses just about 1kb of stack memory.
 /// Typical programs have 4-8kb of stack, so this should usually be fine.
 ///
 /// If that's too much for your application, you can alternatively:
 ///
-/// * allocate a `BatchBvnd` object somewhere else and call `bvnd` on it
-/// * use `tvpack::bvnd` instead, but it won't have SIMD optimizations then.
-/// * use `owens_t::biv_norm` instead
+/// * allocate a [`BatchBvnd`] object somewhere else and call `bvnd` on it
+/// * use [`tvpack::bvnd`] instead, but it won't have SIMD optimizations then.
+/// * use `owens_t::biv_norm` instead, from `owens-t` crate
 #[inline]
 pub fn bvnd(x: f64, y: f64, rho: f64) -> f64 {
     BatchBvnd::new(rho).bvnd(x, y)
@@ -104,7 +104,7 @@ impl BatchBvnd {
     /// * The routine adds an "imaginary" value of -∞ to the beginning of your `xs` array and `ys` array.
     ///   Then, `out[y_idx][x_idx] = bvnd(xs[x_idx], ys[y_idx])`, when `xs` and `ys` are thought of *with those imaginary entries*.
     ///
-    /// * Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
+    ///   * Here, `bvnd(x,y) := Pr[ X > x, Y > y]` for X and Y standard normal of correlation coefficient `rho`.
     ///
     /// * In other words, to find the answer to the query corresponding to `(x_idx, y_idx)` in the input slices,
     ///   you have to add 1 to `x_idx` and to `y_idx` when you go to the output. The entries in row 0 or column 0 of
