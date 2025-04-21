@@ -31,8 +31,8 @@ Even if you don't go as far as that, and continue to do your gaussian quadrature
 ### Case study: Bivariate normal cdf
 
 The `mv_norm::BatchBvnd` object enables evaluating the bivariate normal CDF with as much as ten times higher
-throughput, through the use of precomputation and SIMD optimizations. This implementation was derived
-from the `bvnd` function in [Alan Genz' `tvpack` fortran algorithm](https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514), and is tested against it for fidelity.
+throughput when evaluating at points of a grid, through the use of precomputation and SIMD optimizations. This implementation was derived
+from the `bvnd` function in [Alan Genz' `tvpack` fortran algorithm](https://github.com/cran/mvtnorm/blob/67d734c947eb10fbfa9d3431ba6a7d47241be58c/src/tvpack.f#L514), and was tested against it for fidelity.
 
 #### Comparisons
 
@@ -50,7 +50,7 @@ C++ code from `boost::math`, and then implemented the bivariate normal CDF on to
 The Owen's T method, using the [Patefield-Tandy algorithm](https://www.jstatsoft.org/article/view/v005i05), is competitive with the `tvpack` algorithm for computing the bivariate normal CDF.
 
 * Patefield-Tandy is a hybrid approach that partitions the input domain for Owen's T function, and adaptively chooses one of 6 different series to evaluate based on all of the input parameters that are passed in.
-* Genz' approach in `tvpack` selects one of two algorithms, and one of three quadratures, depending only on the value of `|rho|`. Performance is very sensitive to `|rho|`, and otherwise pretty consistent.
+* Genz' approach in `tvpack` selects one of two algorithms, and one of three quadratures, depending only on the value of `|rho|`. Performance is very sensitive to `|rho|`, and otherwise consistent.
 * For one-off, single point evaluations, both methods give comparable results, and which is better will depend mostly on what values of `rho` you have in your application.
 * When we try to apply SIMD optimizations, however, the `tvpack` algorithm has an advantage.
    * It is difficult to use SIMD optimizations in the context of Patefield-Tandy because the most important routines are based on evaluating some number of terms of an alternating series, and the later terms depend on the values computed for the earlier terms. This computation is inherently sequential -- we can't easily compute 4 or 8 terms simultaneously. We could instead try to batch evaluate 4 or 8 different points of Owen's T simultaneously, but then we have the problem that they might fall in different regions and the Patefield-Tandy classifier might select different series for all of them.
@@ -62,8 +62,6 @@ With these optimizations, throughput increases significantly, and 100 x 100 grid
 
 (Try running the benchmarks on your hardware to see if you observe a similar speed up.)
 
-TODO: Post comparisons with R and [scipy](https://github.com/scipy/scipy/blob/0f1fd4a7268b813fa2b844ca6038e4dfdf90084a/scipy/stats/_multivariate.py#L597) timings.
-
 Compared to the `mvtnorm` R package and the existing `numpy` translations of the original fortran code, I believe that this implementation has some key advantages.
 
 * Precomputing and re-using values that depend only on `rho` turns out to be very effective in the case of the `tvpack` algorithm.
@@ -74,13 +72,11 @@ Compared to the `mvtnorm` R package and the existing `numpy` translations of the
 
 ## Future Directions
 
-It would be interesting to:
-
-* Port more of the `mvtnorm` sources, and use Rust's nice SIMD facilities to optimize them. (Eventually, the `core::simd` stuff when it is stabilized.)
-* Expose python and/or R bindings and publish them.
-* Provide an `f32` version of algorithms, if it can be significantly faster.
+* Port more of the `mvtnorm` sources, and use Rust's nice SIMD facilities to optimize them. (Eventually, the `core::simd` stuff when it is stabilized.) For example support for Trivariate CDF, and for the Miwa algorithm, would be great.
+* Provide an `f32` version of algorithms, especially if it can be significantly faster.
 * Allow the user to choose larger error tolerances and get faster algorithms when possible.
   Whether this should be done by providing differently named functions (see [SLEEF](https://docs.rs/sleef/latest/sleef/f64x/index.html) for example) or a "policy object" like in `boost::math`, I'm not sure.
+* Expose python and/or R bindings and publish them.
 
 ## Licensing and Distribution
 
