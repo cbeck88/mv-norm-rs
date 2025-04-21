@@ -1,5 +1,12 @@
 # mv-norm
 
+[![Crates.io](https://img.shields.io/crates/v/mv-norm?style=flat-square)](https://crates.io/crates/mv-norm)
+[![Crates.io](https://img.shields.io/crates/d/mv-norm?style=flat-square)](https://crates.io/crates/mv-norm)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE-APACHE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE-MIT)
+
+[API Docs](https://docs.rs/conf/latest/mv-norm/)
+
 *Fast* and *accurate* calcluations related to [multivariate normal distributions](https://en.wikipedia.org/wiki/Multivariate_normal_distribution), in pure rust. (Note: Right now we only have the bivariate normal CDF.)
 
 This rust crate ports a subset of the [R package `mvtnorm`](https://cran.r-project.org/web/packages/mvtnorm/mvtnorm.pdf), which is
@@ -45,7 +52,7 @@ and I wanted it to be very fast and accurate, so that the larger integral does n
 
 In my first attempt, I decided to use the [Owen's T function](https://en.wikipedia.org/wiki/Owen%27s_T_function) approach to computing the bivariate normal distribution.
 This is the [`owens-t` crate](https://crates.io/crates/owens-t) published on crates.io -- in that case, we ported
-C++ code from `boost::math`, and then implemented the bivariate normal CDF on top of the `owens_t` implementation.
+C++ code for the T function from `boost::math`, and then implemented the bivariate normal CDF functionality on top of that.
 
 The Owen's T method, using the [Patefield-Tandy algorithm](https://www.jstatsoft.org/article/view/v005i05), is competitive with the `tvpack` algorithm for computing the bivariate normal CDF.
 
