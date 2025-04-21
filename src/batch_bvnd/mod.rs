@@ -508,11 +508,11 @@ impl BatchBvndInner {
                     {
                         // This all ideally gets vectorized, but the "exp" function seems to scare the compiler away,
                         // so we use one of the simd helper libraries that supports exp.
-                        let asr = minus_half * (b_s * x_s_inv - minus_hk);
+                        let asr = minus_half * x_s_inv.mul_sub(b_s, minus_hk);
                         bvn += (*w
                             * asr.exp()
-                            * ((minus_hk * r_s_ratio).exp() * r_s_inv
-                                - (one + c * x_s * (one + d * x_s))))
+                            * (minus_hk * r_s_ratio).exp().mul_sub(*r_s_inv
+                                , x_s.mul_add(d, one).mul_add(c * x_s, one)))
                             .reduce_add();
                     }
                 }
