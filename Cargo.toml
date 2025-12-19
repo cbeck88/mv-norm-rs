@@ -1,6 +1,6 @@
 [package]
 name = "mv-norm"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 authors = ["Chris Beck <beck.ct@gmail.com>"]
 keywords = ["stats", "math", "simd", "libm", "no_std"]
@@ -19,7 +19,7 @@ std = ["wide/std"]
 
 [dependencies]
 libm = "0.2.11"
-wide = { version = "0.7", default-features = false }
+wide = { version = "1.1", default-features = false }
 
 [dev-dependencies]
 assert-within = "0.1.3"

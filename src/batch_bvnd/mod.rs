@@ -15,7 +15,7 @@ fn checked_phid_minus(x: f64) -> f64 {
 /// An integer between 0 and 4.
 #[inline(always)]
 fn count_greater(v: f64x4, threshold: f64) -> usize {
-    let comparison = v.cmp_gt(threshold);
+    let comparison = v.simd_gt(f64x4::splat(threshold));
     // This comparison produces all 0s or all 1 bit patterns. The all 1 bit pattern is a nan,
     // so we need to mask it with 1.0
 
@@ -253,7 +253,7 @@ impl BatchBvndInner {
             let asr = asin(rho) * 0.5;
 
             let tv_pack_quad = select_quadrature_padded(rho.abs());
-            debug_assert!(tv_pack_quad.len() % 2 == 0);
+            debug_assert!(tv_pack_quad.len().is_multiple_of(2));
             let n = tv_pack_quad.len() / 2;
 
             // This is a bit messy -- what's happening here is, we went from
@@ -376,7 +376,7 @@ impl BatchBvndInner {
             });
 
             let limit_multipliers = f64x4::new(core::array::from_fn(|idx| {
-                quadrature[idx].minus_one_over_two_x_s.as_array_ref()[0]
+                quadrature[idx].minus_one_over_two_x_s.as_array()[0]
             }));
 
             Self::RhoOther {
